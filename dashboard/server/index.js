@@ -733,6 +733,7 @@ app.get('/api/feed/posts', optionalAuth, async (req, res) => {
       `SELECT 
         p.id, p.content, p.media_urls, p.media_types, p.location, p.latitude, p.longitude,
         p.likes_count, p.dislikes_count, p.comments_count, p.created_at, p.updated_at,
+        p.dispatch_event_id,
         u.id as user_id, u.username, u.first_name, u.last_name,
         ${userId ? `(SELECT reaction_type FROM post_reactions WHERE post_id = p.id AND user_id = $3) as user_reaction` : `NULL as user_reaction`}
       FROM user_posts p
@@ -750,6 +751,7 @@ app.get('/api/feed/posts', optionalAuth, async (req, res) => {
       location: row.location,
       latitude: row.latitude,
       longitude: row.longitude,
+      dispatchEventId: row.dispatch_event_id,
       likesCount: row.likes_count,
       dislikesCount: row.dislikes_count,
       commentsCount: row.comments_count,
@@ -857,10 +859,11 @@ app.post('/api/feed/upload', authenticateToken, upload.array('media', 4), async 
  * @body {string} location - Location name
  * @body {number} latitude - Latitude coordinate
  * @body {number} longitude - Longitude coordinate
+ * @body {string} dispatchEventId - Optional reference to a dispatch event
  */
 app.post('/api/feed/posts', authenticateToken, async (req, res) => {
   try {
-    const { content, mediaUrls, mediaTypes, location, latitude, longitude } = req.body;
+    const { content, mediaUrls, mediaTypes, location, latitude, longitude, dispatchEventId } = req.body;
     const userId = req.user.id;
 
     // Content is optional if there are media files
@@ -873,10 +876,10 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO user_posts (user_id, content, media_urls, media_types, location, latitude, longitude)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO user_posts (user_id, content, media_urls, media_types, location, latitude, longitude, dispatch_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [userId, content?.trim() || '', mediaUrls || [], mediaTypes || [], location, latitude, longitude]
+      [userId, content?.trim() || '', mediaUrls || [], mediaTypes || [], location, latitude, longitude, dispatchEventId || null]
     );
 
     const post = result.rows[0];
@@ -891,6 +894,7 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
       location: post.location,
       latitude: post.latitude,
       longitude: post.longitude,
+      dispatchEventId: post.dispatch_event_id,
       likesCount: 0,
       dislikesCount: 0,
       commentsCount: 0,

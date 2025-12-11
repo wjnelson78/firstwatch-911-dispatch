@@ -64,6 +64,7 @@ interface Post {
   createdAt: string;
   user: PostUser;
   userReaction: ReactionType;
+  dispatchEventId?: string | null;
   // New: track reaction breakdown
   reactions?: { type: string; count: number }[];
 }
@@ -176,12 +177,14 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [hoveredReaction, setHoveredReaction] = useState<number | null>(null);
+  const [linkedDispatchEventId, setLinkedDispatchEventId] = useState<string | null>(null);
 
   // Pre-fill post content from dispatch event
   useEffect(() => {
     if (prefilledEvent) {
       const prefillContent = `📢 ${prefilledEvent.call_type}\n\n📍 Location: ${prefilledEvent.address}, ${prefilledEvent.jurisdiction}\n🏢 Agency: ${prefilledEvent.agency_type}${prefilledEvent.units ? `\n🚔 Units: ${prefilledEvent.units}` : ''}\n\n`;
       setNewPostContent(prefillContent);
+      setLinkedDispatchEventId(prefilledEvent.event_id);
       onEventHandled?.();
     }
   }, [prefilledEvent, onEventHandled]);
@@ -262,7 +265,8 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
         body: JSON.stringify({
           content: newPostContent.trim(),
           mediaUrls,
-          mediaTypes
+          mediaTypes,
+          dispatchEventId: linkedDispatchEventId
         })
       });
       
@@ -272,6 +276,7 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
       setPosts(prev => [newPost, ...prev]);
       setNewPostContent('');
       setSelectedFiles([]);
+      setLinkedDispatchEventId(null); // Clear the linked event after posting
       // Clean up preview URLs
       previewUrls.forEach(url => URL.revokeObjectURL(url));
       setPreviewUrls([]);
