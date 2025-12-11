@@ -89,7 +89,7 @@ const SAMPLE_POSTS: Post[] = [
     commentsCount: 5,
     createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
     user: {
-      id: 0,
+      id: 1,
       firstName: "Sarah",
       lastName: "Mitchell",
       initials: "SM"
@@ -103,11 +103,11 @@ const SAMPLE_POSTS: Post[] = [
     mediaTypes: [],
     location: "Monroe, WA",
     likesCount: 47,
-    dislikesCount: 1,
-    commentsCount: 12,
+    dislikesCount: 0,
+    commentsCount: 3,
     createdAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
     user: {
-      id: 0,
+      id: 2,
       firstName: "David",
       lastName: "Chen",
       initials: "DC"
@@ -122,10 +122,10 @@ const SAMPLE_POSTS: Post[] = [
     location: "Lynnwood, WA",
     likesCount: 156,
     dislikesCount: 0,
-    commentsCount: 28,
+    commentsCount: 4,
     createdAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(), // 18 hours ago
     user: {
-      id: 0,
+      id: 3,
       firstName: "Jennifer",
       lastName: "Park",
       initials: "JP"
@@ -133,6 +133,28 @@ const SAMPLE_POSTS: Post[] = [
     userReaction: null
   }
 ];
+
+// Sample comments for the sample posts
+const SAMPLE_COMMENTS: Record<number, Comment[]> = {
+  [-1]: [
+    { id: 1, content: "So grateful for our first responders! 🙏", createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(), user: { id: 4, firstName: "Mike", lastName: "Johnson", initials: "MJ" }, likesCount: 3 },
+    { id: 2, content: "Was that near the Safeway? Hope everyone is okay.", createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(), user: { id: 5, firstName: "Lisa", lastName: "Wong", initials: "LW" }, likesCount: 1 },
+    { id: 3, content: "FD7 is the best! They've helped our family before.", createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(), user: { id: 6, firstName: "Tom", lastName: "Bradley", initials: "TB" }, likesCount: 5 },
+    { id: 4, content: "Stay safe out there everyone! 🔥🚒", createdAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(), user: { id: 7, firstName: "Amy", lastName: "Stevens", initials: "AS" }, likesCount: 2 },
+    { id: 5, content: "Great response time as always!", createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(), user: { id: 8, firstName: "Chris", lastName: "Martinez", initials: "CM" }, likesCount: 0 },
+  ],
+  [-2]: [
+    { id: 6, content: "Thanks for the heads up! Taking 522 instead today.", createdAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), user: { id: 6, firstName: "Tom", lastName: "Bradley", initials: "TB" }, likesCount: 8 },
+    { id: 7, content: "It's been crazy out there. Saw 2 accidents myself.", createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(), user: { id: 9, firstName: "Rachel", lastName: "Kim", initials: "RK" }, likesCount: 4 },
+    { id: 8, content: "WSDOT needs to sand these roads better 😤", createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), user: { id: 10, firstName: "Dan", lastName: "White", initials: "DW" }, likesCount: 12 },
+  ],
+  [-3]: [
+    { id: 9, content: "So happy to hear your dad is doing better! ❤️", createdAt: new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString(), user: { id: 7, firstName: "Amy", lastName: "Stevens", initials: "AS" }, likesCount: 24 },
+    { id: 10, content: "The medics at Station 17 are amazing. They saved my neighbor last year too.", createdAt: new Date(Date.now() - 15 * 60 * 60 * 1000).toISOString(), user: { id: 8, firstName: "Chris", lastName: "Martinez", initials: "CM" }, likesCount: 12 },
+    { id: 11, content: "Prayers for a full recovery! 🙏💙", createdAt: new Date(Date.now() - 14 * 60 * 60 * 1000).toISOString(), user: { id: 11, firstName: "Susan", lastName: "Lee", initials: "SL" }, likesCount: 8 },
+    { id: 12, content: "This is why we support our local EMS!", createdAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(), user: { id: 12, firstName: "Bob", lastName: "Harris", initials: "BH" }, likesCount: 6 },
+  ]
+};
 
 export function UserFeed() {
   const { user } = useAuth();
@@ -142,7 +164,7 @@ export function UserFeed() {
   const [newPostContent, setNewPostContent] = useState('');
   const [isPosting, setIsPosting] = useState(false);
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
-  const [postComments, setPostComments] = useState<Record<number, Comment[]>>({});
+  const [postComments, setPostComments] = useState<Record<number, Comment[]>>(SAMPLE_COMMENTS);
   const [newComments, setNewComments] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
