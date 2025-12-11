@@ -45,6 +45,10 @@ import { Charts } from './Charts';
 import { EventDetailModal } from './EventDetailModal';
 import { ActiveUsers } from './ActiveUsers';
 import { UserMenu } from '@/components/auth/UserMenu';
+import { ChatForum, PrivateChat } from '@/components/chat';
+import { UserFeed } from '@/components/feed';
+import { IncidentReport } from '@/components/incident';
+import { MainNav, type ActiveView } from '@/components/navigation';
 import { fetchDispatches, fetchStats, fetchFilters } from '@/services/api';
 import { 
   RefreshCw, 
@@ -73,7 +77,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  MessageCircle,
+  Calendar
 } from 'lucide-react';
 import type { DispatchEvent, Stats, HourlyStats, FilterOptions } from '@/types/dispatch';
 import { formatDistanceToNow } from 'date-fns';
@@ -150,11 +156,23 @@ export function Dashboard() {
   /** Whether analytics panel is expanded */
   const [showAnalytics, setShowAnalytics] = useState(false);
   
+  /** Whether chat panel is expanded */
+  const [showChat, setShowChat] = useState(true);
+  
   /** Jurisdiction dropdown popover state */
   const [jurisdictionPopoverOpen, setJurisdictionPopoverOpen] = useState(false);
   
   /** Call type dropdown popover state */
   const [callTypePopoverOpen, setCallTypePopoverOpen] = useState(false);
+
+  /** Date range filter - start date */
+  const [startDate, setStartDate] = useState<string>('');
+  
+  /** Date range filter - end date */
+  const [endDate, setEndDate] = useState<string>('');
+
+  /** Currently active view/section */
+  const [activeView, setActiveView] = useState<ActiveView>('dispatch');
 
   // ============================================================================
   // Pagination & Sorting State
@@ -215,6 +233,8 @@ export function Dashboard() {
           jurisdiction: jurisdictionFilter !== 'all' ? jurisdictionFilter : undefined,
           callType: callTypeFilter !== 'all' ? callTypeFilter : undefined,
           search: searchQuery || undefined,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
           sortBy,
           sortOrder
         }),
@@ -270,7 +290,7 @@ export function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, agencyFilter, jurisdictionFilter, callTypeFilter, searchQuery, sortBy, sortOrder]);
+  }, [currentPage, agencyFilter, jurisdictionFilter, callTypeFilter, searchQuery, startDate, endDate, sortBy, sortOrder]);
 
   // ============================================================================
   // Effects
@@ -314,7 +334,9 @@ export function Dashboard() {
     agencyFilter !== 'all',
     jurisdictionFilter !== 'all',
     callTypeFilter !== 'all',
-    searchQuery.length > 0
+    searchQuery.length > 0,
+    startDate.length > 0,
+    endDate.length > 0
   ].filter(Boolean).length;
 
   // ============================================================================
@@ -327,6 +349,8 @@ export function Dashboard() {
     setJurisdictionFilter('all');
     setCallTypeFilter('all');
     setSearchQuery('');
+    setStartDate('');
+    setEndDate('');
     setCurrentPage(1);
   };
 
@@ -491,9 +515,12 @@ export function Dashboard() {
         </div>
       </header>
 
+      {/* Main Navigation */}
+      <MainNav activeView={activeView} onViewChange={setActiveView} />
+
       {/* Main Content */}
       <main className="container py-6 space-y-6 relative z-10">
-        {/* Error Alert */}
+        {/* Error Alert - shown on all views */}
         {error && (
           <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 flex items-center gap-3">
             <AlertTriangle className="h-5 w-5" />
@@ -504,6 +531,9 @@ export function Dashboard() {
           </div>
         )}
 
+        {/* === DISPATCH VIEW === */}
+        {activeView === 'dispatch' && (
+          <>
         {/* Stats Cards */}
         <StatsCards stats={stats} loading={loading} />
 
@@ -667,6 +697,40 @@ export function Dashboard() {
               </PopoverContent>
             </Popover>
 
+            {/* Date Range Filter */}
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <Input
+                  type="datetime-local"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Start date"
+                  className={cn(
+                    "pl-10 w-[200px] bg-slate-800/50 border-slate-700 focus:border-purple-500/50 text-white text-sm",
+                    startDate && "border-purple-500/50 text-purple-400"
+                  )}
+                />
+              </div>
+              <span className="text-slate-500">to</span>
+              <Input
+                type="datetime-local"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="End date"
+                className={cn(
+                  "w-[200px] bg-slate-800/50 border-slate-700 focus:border-purple-500/50 text-white text-sm",
+                  endDate && "border-purple-500/50 text-purple-400"
+                )}
+              />
+            </div>
+
             {/* Clear filters */}
             {activeFiltersCount > 0 && (
               <Button
@@ -731,6 +795,22 @@ export function Dashboard() {
             >
               <TrendingUp className="h-4 w-4" />
               Analytics
+            </Button>
+
+            {/* Chat toggle */}
+            <Button
+              variant={showChat ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setShowChat(!showChat)}
+              className={cn(
+                "gap-2",
+                showChat 
+                  ? "bg-purple-500 hover:bg-purple-600" 
+                  : "border-slate-700 bg-slate-800/50 hover:bg-slate-700"
+              )}
+            >
+              <MessageCircle className="h-4 w-4" />
+              Chat
             </Button>
           </div>
         </div>
@@ -1000,6 +1080,28 @@ export function Dashboard() {
               </CardContent>
             </Card>
           </div>
+        )}
+
+        {/* Community Chat Section (within dispatch view) */}
+        {showChat && (
+          <ChatForum />
+        )}
+          </>
+        )}
+
+        {/* === USER FEED VIEW === */}
+        {activeView === 'feed' && (
+          <UserFeed />
+        )}
+
+        {/* === INCIDENT REPORT VIEW === */}
+        {activeView === 'report' && (
+          <IncidentReport />
+        )}
+
+        {/* === PRIVATE CHAT VIEW === */}
+        {activeView === 'chat' && (
+          <PrivateChat />
         )}
       </main>
 

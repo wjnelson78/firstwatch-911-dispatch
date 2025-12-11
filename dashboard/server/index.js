@@ -516,6 +516,937 @@ app.get('/api/active-users', (req, res) => {
   });
 });
 
+// ============================================================================
+// Chat API Endpoints
+// ============================================================================
+
+/**
+ * Get Chat Messages
+ * 
+ * Retrieves chat messages with pagination. Can optionally filter by event_id
+ * for incident-specific discussions.
+ * 
+ * @route GET /api/chat/messages
+ * @query {number} limit - Max messages to return (default: 50, max: 100)
+ * @query {string} before - Get messages before this timestamp (for pagination)
+ * @query {number} eventId - Filter messages for a specific incident
+ * @returns {object} { messages: Array, hasMore: boolean }
+ */
+app.get('/api/chat/messages', async (req, res) => {
+  try {
+    const { limit = 50, before, eventId } = req.query;
+    const safeLimit = Math.min(parseInt(limit) || 50, 100);
+    
+    let query = `
+      SELECT 
+        m.id,
+        m.message,
+        m.event_id,
+        m.created_at,
+        m.user_id,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM chat_messages m
+      JOIN users u ON m.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIndex = 1;
+    
+    if (before) {
+      query += ` AND m.created_at < $${paramIndex}`;
+      params.push(before);
+      paramIndex++;
+    }
+    
+    if (eventId) {
+      query += ` AND m.event_id = $${paramIndex}`;
+      params.push(parseInt(eventId));
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY m.created_at DESC LIMIT $${paramIndex}`;
+    params.push(safeLimit + 1); // Fetch one extra to check if there are more
+    
+    const result = await pool.query(query, params);
+    const hasMore = result.rows.length > safeLimit;
+    const messages = result.rows.slice(0, safeLimit).map(row => ({
+      id: row.id,
+      message: row.message,
+      eventId: row.event_id,
+      createdAt: row.created_at,
+      user: {
+        id: row.user_id,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
+      }
+    }));
+    
+    res.json({ messages: messages.reverse(), hasMore });
+  } catch (error) {
+    console.error('Error fetching chat messages:', error);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+/**
+ * Post Chat Message
+ * 
+ * Creates a new chat message. Requires authentication.
+ * 
+ * @route POST /api/chat/messages
+ * @body {string} message - The message content (max 1000 chars)
+ * @body {number} eventId - Optional event ID to link message to an incident
+ * @returns {object} The created message
+ */
+app.post('/api/chat/messages', authenticateToken, async (req, res) => {
+  try {
+    const { message, eventId } = req.body;
+    const userId = req.user.id;
+    
+    // Validation
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    
+    const trimmedMessage = message.trim();
+    if (trimmedMessage.length === 0) {
+      return res.status(400).json({ error: 'Message cannot be empty' });
+    }
+    
+    if (trimmedMessage.length > 1000) {
+      return res.status(400).json({ error: 'Message must be 1000 characters or less' });
+    }
+    
+    // Insert message
+    const result = await pool.query(
+      `INSERT INTO chat_messages (user_id, message, event_id)
+       VALUES ($1, $2, $3)
+       RETURNING id, message, event_id, created_at`,
+      [userId, trimmedMessage, eventId || null]
+    );
+    
+    // Get user info for response
+    const userResult = await pool.query(
+      'SELECT first_name, last_name FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userResult.rows[0];
+    
+    res.status(201).json({
+      id: result.rows[0].id,
+      message: result.rows[0].message,
+      eventId: result.rows[0].event_id,
+      createdAt: result.rows[0].created_at,
+      user: {
+        id: userId,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()
+      }
+    });
+  } catch (error) {
+    console.error('Error posting chat message:', error);
+    res.status(500).json({ error: 'Failed to post message' });
+  }
+});
+
+/**
+ * Delete Chat Message
+ * 
+ * Deletes a chat message. Users can only delete their own messages,
+ * admins can delete any message.
+ * 
+ * @route DELETE /api/chat/messages/:id
+ * @returns {object} { success: true }
+ */
+app.delete('/api/chat/messages/:id', authenticateToken, async (req, res) => {
+  try {
+    const messageId = parseInt(req.params.id);
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    
+    // Check if message exists and belongs to user (or user is admin)
+    const check = await pool.query(
+      'SELECT user_id FROM chat_messages WHERE id = $1',
+      [messageId]
+    );
+    
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    if (check.rows[0].user_id !== userId && userRole !== 'admin') {
+      return res.status(403).json({ error: 'Cannot delete another user\'s message' });
+    }
+    
+    await pool.query('DELETE FROM chat_messages WHERE id = $1', [messageId]);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting chat message:', error);
+    res.status(500).json({ error: 'Failed to delete message' });
+  }
+});
+
+// =============================================================================
+// USER FEED ENDPOINTS
+// =============================================================================
+
+/**
+ * Get User Feed Posts
+ * 
+ * Retrieves posts from the user feed with pagination.
+ * Includes author info, reaction counts, and comment counts.
+ * 
+ * @route GET /api/feed/posts
+ * @query {number} limit - Maximum results to return (default: 20)
+ * @query {number} offset - Pagination offset (default: 0)
+ * @returns {object[]} Array of posts with author info
+ */
+app.get('/api/feed/posts', optionalAuth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user?.id;
+
+    const result = await pool.query(
+      `SELECT 
+        p.id, p.content, p.media_urls, p.media_types, p.location, p.latitude, p.longitude,
+        p.likes_count, p.dislikes_count, p.comments_count, p.created_at, p.updated_at,
+        u.id as user_id, u.username, u.first_name, u.last_name,
+        ${userId ? `(SELECT reaction_type FROM post_reactions WHERE post_id = p.id AND user_id = $3) as user_reaction` : `NULL as user_reaction`}
+      FROM user_posts p
+      JOIN users u ON p.user_id = u.id
+      ORDER BY p.created_at DESC
+      LIMIT $1 OFFSET $2`,
+      userId ? [limit, offset, userId] : [limit, offset]
+    );
+
+    const posts = result.rows.map(row => ({
+      id: row.id,
+      content: row.content,
+      mediaUrls: row.media_urls || [],
+      mediaTypes: row.media_types || [],
+      location: row.location,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      likesCount: row.likes_count,
+      dislikesCount: row.dislikes_count,
+      commentsCount: row.comments_count,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      userReaction: row.user_reaction,
+      author: {
+        id: row.user_id,
+        username: row.username,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
+      }
+    }));
+
+    res.json(posts);
+  } catch (error) {
+    console.error('Error fetching feed posts:', error);
+    res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+});
+
+/**
+ * Create a new post
+ * 
+ * @route POST /api/feed/posts
+ * @body {string} content - Post content (required)
+ * @body {string[]} mediaUrls - Array of media URLs
+ * @body {string[]} mediaTypes - Array of media types (image, video)
+ * @body {string} location - Location name
+ * @body {number} latitude - Latitude coordinate
+ * @body {number} longitude - Longitude coordinate
+ */
+app.post('/api/feed/posts', authenticateToken, async (req, res) => {
+  try {
+    const { content, mediaUrls, mediaTypes, location, latitude, longitude } = req.body;
+    const userId = req.user.id;
+
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Post content is required' });
+    }
+
+    if (content.length > 5000) {
+      return res.status(400).json({ error: 'Post content must be 5000 characters or less' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO user_posts (user_id, content, media_urls, media_types, location, latitude, longitude)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [userId, content.trim(), mediaUrls || [], mediaTypes || [], location, latitude, longitude]
+    );
+
+    const post = result.rows[0];
+    const userResult = await pool.query('SELECT username, first_name, last_name FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+
+    res.status(201).json({
+      id: post.id,
+      content: post.content,
+      mediaUrls: post.media_urls || [],
+      mediaTypes: post.media_types || [],
+      location: post.location,
+      latitude: post.latitude,
+      longitude: post.longitude,
+      likesCount: 0,
+      dislikesCount: 0,
+      commentsCount: 0,
+      createdAt: post.created_at,
+      author: {
+        id: userId,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()
+      }
+    });
+  } catch (error) {
+    console.error('Error creating post:', error);
+    res.status(500).json({ error: 'Failed to create post' });
+  }
+});
+
+/**
+ * React to a post (like/dislike)
+ * 
+ * @route POST /api/feed/posts/:id/react
+ * @body {string} reactionType - 'like' or 'dislike'
+ */
+app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    const userId = req.user.id;
+    const { reactionType } = req.body;
+
+    if (!['like', 'dislike'].includes(reactionType)) {
+      return res.status(400).json({ error: 'Invalid reaction type' });
+    }
+
+    // Check if user already reacted
+    const existing = await pool.query(
+      'SELECT id, reaction_type FROM post_reactions WHERE post_id = $1 AND user_id = $2',
+      [postId, userId]
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (existing.rows.length > 0) {
+        const oldType = existing.rows[0].reaction_type;
+        if (oldType === reactionType) {
+          // Remove reaction
+          await client.query('DELETE FROM post_reactions WHERE id = $1', [existing.rows[0].id]);
+          if (reactionType === 'like') {
+            await client.query('UPDATE user_posts SET likes_count = likes_count - 1 WHERE id = $1', [postId]);
+          } else {
+            await client.query('UPDATE user_posts SET dislikes_count = dislikes_count - 1 WHERE id = $1', [postId]);
+          }
+        } else {
+          // Change reaction
+          await client.query('UPDATE post_reactions SET reaction_type = $1 WHERE id = $2', [reactionType, existing.rows[0].id]);
+          if (reactionType === 'like') {
+            await client.query('UPDATE user_posts SET likes_count = likes_count + 1, dislikes_count = dislikes_count - 1 WHERE id = $1', [postId]);
+          } else {
+            await client.query('UPDATE user_posts SET likes_count = likes_count - 1, dislikes_count = dislikes_count + 1 WHERE id = $1', [postId]);
+          }
+        }
+      } else {
+        // New reaction
+        await client.query(
+          'INSERT INTO post_reactions (post_id, user_id, reaction_type) VALUES ($1, $2, $3)',
+          [postId, userId, reactionType]
+        );
+        if (reactionType === 'like') {
+          await client.query('UPDATE user_posts SET likes_count = likes_count + 1 WHERE id = $1', [postId]);
+        } else {
+          await client.query('UPDATE user_posts SET dislikes_count = dislikes_count + 1 WHERE id = $1', [postId]);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // Get updated counts
+      const updated = await pool.query('SELECT likes_count, dislikes_count FROM user_posts WHERE id = $1', [postId]);
+      res.json({
+        likesCount: updated.rows[0].likes_count,
+        dislikesCount: updated.rows[0].dislikes_count
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error reacting to post:', error);
+    res.status(500).json({ error: 'Failed to react to post' });
+  }
+});
+
+/**
+ * Get comments for a post
+ * 
+ * @route GET /api/feed/posts/:id/comments
+ */
+app.get('/api/feed/posts/:id/comments', async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    const result = await pool.query(
+      `SELECT c.id, c.content, c.created_at,
+        u.id as user_id, u.username, u.first_name, u.last_name
+       FROM post_comments c
+       JOIN users u ON c.user_id = u.id
+       WHERE c.post_id = $1
+       ORDER BY c.created_at ASC`,
+      [postId]
+    );
+
+    const comments = result.rows.map(row => ({
+      id: row.id,
+      content: row.content,
+      createdAt: row.created_at,
+      author: {
+        id: row.user_id,
+        username: row.username,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
+      }
+    }));
+
+    res.json(comments);
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    res.status(500).json({ error: 'Failed to fetch comments' });
+  }
+});
+
+/**
+ * Add comment to a post
+ * 
+ * @route POST /api/feed/posts/:id/comments
+ * @body {string} content - Comment content
+ */
+app.post('/api/feed/posts/:id/comments', authenticateToken, async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    const userId = req.user.id;
+    const { content } = req.body;
+
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Comment content is required' });
+    }
+
+    if (content.length > 1000) {
+      return res.status(400).json({ error: 'Comment must be 1000 characters or less' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const result = await client.query(
+        'INSERT INTO post_comments (post_id, user_id, content) VALUES ($1, $2, $3) RETURNING *',
+        [postId, userId, content.trim()]
+      );
+
+      await client.query('UPDATE user_posts SET comments_count = comments_count + 1 WHERE id = $1', [postId]);
+
+      await client.query('COMMIT');
+
+      const userResult = await pool.query('SELECT username, first_name, last_name FROM users WHERE id = $1', [userId]);
+      const user = userResult.rows[0];
+
+      res.status(201).json({
+        id: result.rows[0].id,
+        content: result.rows[0].content,
+        createdAt: result.rows[0].created_at,
+        author: {
+          id: userId,
+          username: user.username,
+          firstName: user.first_name,
+          lastName: user.last_name,
+          initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()
+        }
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error adding comment:', error);
+    res.status(500).json({ error: 'Failed to add comment' });
+  }
+});
+
+// =============================================================================
+// INCIDENT REPORT ENDPOINTS
+// =============================================================================
+
+/**
+ * Submit an incident report
+ * 
+ * @route POST /api/incidents
+ */
+app.post('/api/incidents', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || null;
+    const {
+      reporterName, reporterPhone, reporterEmail,
+      incidentType, incidentDate, locationAddress, locationCity, locationZip,
+      description, personsInvolved, vehiclesInvolved,
+      injuriesReported, injuryDetails, witnessInfo
+    } = req.body;
+
+    // Validation
+    if (!reporterName || !reporterPhone || !reporterEmail) {
+      return res.status(400).json({ error: 'Reporter contact information is required' });
+    }
+
+    if (!incidentType || !incidentDate || !locationAddress || !description) {
+      return res.status(400).json({ error: 'Incident details are required' });
+    }
+
+    // Generate incident number: YYYYMMDD-XXXXX
+    const today = new Date();
+    const datePrefix = today.toISOString().slice(0, 10).replace(/-/g, '');
+    
+    const countResult = await pool.query(
+      `SELECT COUNT(*) + 1 as num FROM incident_reports 
+       WHERE incident_number LIKE $1`,
+      [`${datePrefix}-%`]
+    );
+    const sequenceNum = countResult.rows[0].num.toString().padStart(5, '0');
+    const incidentNumber = `${datePrefix}-${sequenceNum}`;
+
+    const result = await pool.query(
+      `INSERT INTO incident_reports (
+        incident_number, user_id, reporter_name, reporter_phone, reporter_email,
+        incident_type, incident_date, location_address, location_city, location_zip,
+        description, persons_involved, vehicles_involved,
+        injuries_reported, injury_details, witness_info, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'submitted')
+      RETURNING id, incident_number, status, created_at`,
+      [
+        incidentNumber, userId, reporterName, reporterPhone, reporterEmail,
+        incidentType, incidentDate, locationAddress, locationCity || null, locationZip || null,
+        description, personsInvolved || null, vehiclesInvolved || null,
+        injuriesReported || false, injuryDetails || null, witnessInfo || null
+      ]
+    );
+
+    res.status(201).json({
+      id: result.rows[0].id,
+      incidentNumber: result.rows[0].incident_number,
+      status: result.rows[0].status,
+      createdAt: result.rows[0].created_at
+    });
+  } catch (error) {
+    console.error('Error submitting incident report:', error);
+    res.status(500).json({ error: 'Failed to submit incident report' });
+  }
+});
+
+/**
+ * Get incident reports for current user
+ * 
+ * @route GET /api/incidents
+ */
+app.get('/api/incidents', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await pool.query(
+      `SELECT id, incident_number, incident_type, incident_date, location_address,
+        status, created_at, updated_at
+       FROM incident_reports
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    res.json(result.rows.map(row => ({
+      id: row.id,
+      incidentNumber: row.incident_number,
+      incidentType: row.incident_type,
+      incidentDate: row.incident_date,
+      locationAddress: row.location_address,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    })));
+  } catch (error) {
+    console.error('Error fetching incidents:', error);
+    res.status(500).json({ error: 'Failed to fetch incidents' });
+  }
+});
+
+// =============================================================================
+// PRIVATE CHAT / CONVERSATIONS ENDPOINTS
+// =============================================================================
+
+/**
+ * Get available users to start a conversation with
+ * 
+ * @route GET /api/users/available
+ */
+app.get('/api/users/available', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await pool.query(
+      `SELECT id as user_id, username, first_name, last_name, role
+       FROM users
+       WHERE id != $1 AND is_active = true
+       ORDER BY first_name, last_name`,
+      [userId]
+    );
+
+    res.json(result.rows.map(row => ({
+      userId: row.user_id,
+      username: row.username,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      role: row.role === 'agency' ? 'agency' : 'member'
+    })));
+  } catch (error) {
+    console.error('Error fetching available users:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+/**
+ * Get user's conversations
+ * 
+ * @route GET /api/conversations
+ */
+app.get('/api/conversations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get conversations user is part of
+    const result = await pool.query(
+      `SELECT DISTINCT c.id, c.name, c.is_group, c.created_by, c.created_at
+       FROM chat_conversations c
+       JOIN chat_participants cp ON c.id = cp.conversation_id
+       WHERE cp.user_id = $1
+       ORDER BY c.updated_at DESC`,
+      [userId]
+    );
+
+    const conversations = await Promise.all(result.rows.map(async (conv) => {
+      // Get participants
+      const participants = await pool.query(
+        `SELECT cp.user_id, cp.role, u.username, u.first_name, u.last_name
+         FROM chat_participants cp
+         JOIN users u ON cp.user_id = u.id
+         WHERE cp.conversation_id = $1`,
+        [conv.id]
+      );
+
+      // Get last message
+      const lastMessage = await pool.query(
+        `SELECT pm.id, pm.content, pm.created_at, pm.sender_id,
+          u.first_name, u.last_name
+         FROM private_messages pm
+         JOIN users u ON pm.sender_id = u.id
+         WHERE pm.conversation_id = $1
+         ORDER BY pm.created_at DESC
+         LIMIT 1`,
+        [conv.id]
+      );
+
+      // Get unread count
+      const unread = await pool.query(
+        `SELECT COUNT(*) as count FROM private_messages
+         WHERE conversation_id = $1 AND sender_id != $2 AND is_read = false`,
+        [conv.id, userId]
+      );
+
+      return {
+        id: conv.id,
+        name: conv.name,
+        isGroup: conv.is_group,
+        createdBy: conv.created_by,
+        createdAt: conv.created_at,
+        participants: participants.rows.map(p => ({
+          userId: p.user_id,
+          username: p.username,
+          firstName: p.first_name,
+          lastName: p.last_name,
+          role: p.role
+        })),
+        lastMessage: lastMessage.rows[0] ? {
+          id: lastMessage.rows[0].id,
+          content: lastMessage.rows[0].content,
+          createdAt: lastMessage.rows[0].created_at,
+          senderId: lastMessage.rows[0].sender_id,
+          senderFirstName: lastMessage.rows[0].first_name,
+          senderLastName: lastMessage.rows[0].last_name
+        } : null,
+        unreadCount: parseInt(unread.rows[0].count)
+      };
+    }));
+
+    res.json(conversations);
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+/**
+ * Create a new conversation
+ * 
+ * @route POST /api/conversations
+ * @body {number[]} participantIds - User IDs to add to conversation
+ * @body {boolean} isGroup - Whether this is a group chat
+ * @body {string} name - Group name (optional for groups)
+ */
+app.post('/api/conversations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { participantIds, isGroup, name } = req.body;
+
+    if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
+      return res.status(400).json({ error: 'Participant IDs are required' });
+    }
+
+    // For 1:1 chats, check if conversation already exists
+    if (!isGroup && participantIds.length === 1) {
+      const existing = await pool.query(
+        `SELECT c.id FROM chat_conversations c
+         JOIN chat_participants cp1 ON c.id = cp1.conversation_id AND cp1.user_id = $1
+         JOIN chat_participants cp2 ON c.id = cp2.conversation_id AND cp2.user_id = $2
+         WHERE c.is_group = false`,
+        [userId, participantIds[0]]
+      );
+
+      if (existing.rows.length > 0) {
+        // Return existing conversation
+        const convId = existing.rows[0].id;
+        const participants = await pool.query(
+          `SELECT cp.user_id, cp.role, u.username, u.first_name, u.last_name
+           FROM chat_participants cp
+           JOIN users u ON cp.user_id = u.id
+           WHERE cp.conversation_id = $1`,
+          [convId]
+        );
+
+        return res.json({
+          id: convId,
+          name: null,
+          isGroup: false,
+          createdBy: userId,
+          participants: participants.rows.map(p => ({
+            userId: p.user_id,
+            username: p.username,
+            firstName: p.first_name,
+            lastName: p.last_name,
+            role: p.role
+          })),
+          unreadCount: 0
+        });
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Create conversation
+      const convResult = await client.query(
+        `INSERT INTO chat_conversations (name, is_group, created_by)
+         VALUES ($1, $2, $3)
+         RETURNING id, name, is_group, created_by, created_at`,
+        [name || null, isGroup || false, userId]
+      );
+      const convId = convResult.rows[0].id;
+
+      // Add creator as admin
+      await client.query(
+        `INSERT INTO chat_participants (conversation_id, user_id, role)
+         VALUES ($1, $2, 'admin')`,
+        [convId, userId]
+      );
+
+      // Add other participants
+      for (const participantId of participantIds) {
+        await client.query(
+          `INSERT INTO chat_participants (conversation_id, user_id, role)
+           VALUES ($1, $2, 'member')`,
+          [convId, participantId]
+        );
+      }
+
+      await client.query('COMMIT');
+
+      // Fetch participants for response
+      const participants = await pool.query(
+        `SELECT cp.user_id, cp.role, u.username, u.first_name, u.last_name
+         FROM chat_participants cp
+         JOIN users u ON cp.user_id = u.id
+         WHERE cp.conversation_id = $1`,
+        [convId]
+      );
+
+      res.status(201).json({
+        id: convId,
+        name: convResult.rows[0].name,
+        isGroup: convResult.rows[0].is_group,
+        createdBy: convResult.rows[0].created_by,
+        createdAt: convResult.rows[0].created_at,
+        participants: participants.rows.map(p => ({
+          userId: p.user_id,
+          username: p.username,
+          firstName: p.first_name,
+          lastName: p.last_name,
+          role: p.role
+        })),
+        unreadCount: 0
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error creating conversation:', error);
+    res.status(500).json({ error: 'Failed to create conversation' });
+  }
+});
+
+/**
+ * Get messages in a conversation
+ * 
+ * @route GET /api/conversations/:id/messages
+ */
+app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
+  try {
+    const conversationId = parseInt(req.params.id);
+    const userId = req.user.id;
+
+    // Verify user is participant
+    const participant = await pool.query(
+      'SELECT 1 FROM chat_participants WHERE conversation_id = $1 AND user_id = $2',
+      [conversationId, userId]
+    );
+
+    if (participant.rows.length === 0) {
+      return res.status(403).json({ error: 'Not a participant of this conversation' });
+    }
+
+    // Get messages
+    const result = await pool.query(
+      `SELECT pm.id, pm.conversation_id, pm.sender_id, pm.content, pm.media_url, pm.is_read, pm.created_at,
+        u.username, u.first_name, u.last_name
+       FROM private_messages pm
+       JOIN users u ON pm.sender_id = u.id
+       WHERE pm.conversation_id = $1
+       ORDER BY pm.created_at ASC`,
+      [conversationId]
+    );
+
+    // Mark messages as read
+    await pool.query(
+      `UPDATE private_messages SET is_read = true
+       WHERE conversation_id = $1 AND sender_id != $2 AND is_read = false`,
+      [conversationId, userId]
+    );
+
+    const messages = result.rows.map(row => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      senderId: row.sender_id,
+      senderUsername: row.username,
+      senderFirstName: row.first_name,
+      senderLastName: row.last_name,
+      content: row.content,
+      mediaUrl: row.media_url,
+      isRead: row.is_read,
+      createdAt: row.created_at
+    }));
+
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+/**
+ * Send a message in a conversation
+ * 
+ * @route POST /api/conversations/:id/messages
+ * @body {string} content - Message content
+ */
+app.post('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
+  try {
+    const conversationId = parseInt(req.params.id);
+    const userId = req.user.id;
+    const { content } = req.body;
+
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Message content is required' });
+    }
+
+    // Verify user is participant
+    const participant = await pool.query(
+      'SELECT 1 FROM chat_participants WHERE conversation_id = $1 AND user_id = $2',
+      [conversationId, userId]
+    );
+
+    if (participant.rows.length === 0) {
+      return res.status(403).json({ error: 'Not a participant of this conversation' });
+    }
+
+    // Insert message
+    const result = await pool.query(
+      `INSERT INTO private_messages (conversation_id, sender_id, content)
+       VALUES ($1, $2, $3)
+       RETURNING id, conversation_id, sender_id, content, media_url, is_read, created_at`,
+      [conversationId, userId, content.trim()]
+    );
+
+    // Update conversation timestamp
+    await pool.query(
+      'UPDATE chat_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [conversationId]
+    );
+
+    const userResult = await pool.query('SELECT username, first_name, last_name FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+
+    res.status(201).json({
+      id: result.rows[0].id,
+      conversationId: result.rows[0].conversation_id,
+      senderId: result.rows[0].sender_id,
+      senderUsername: user.username,
+      senderFirstName: user.first_name,
+      senderLastName: user.last_name,
+      content: result.rows[0].content,
+      mediaUrl: result.rows[0].media_url,
+      isRead: result.rows[0].is_read,
+      createdAt: result.rows[0].created_at
+    });
+  } catch (error) {
+    console.error('Error sending message:', error);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 API Server running on http://localhost:${PORT}`);
 });
