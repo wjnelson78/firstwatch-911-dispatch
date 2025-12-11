@@ -55,9 +55,8 @@ export function StatsCards({ stats, loading }: StatsCardsProps) {
   const totalCount = stats?.total || 0;
   const uniqueAgencies = stats?.uniqueAgencies || 0;
 
-  // Get recent activity (sum of events from the last 6 hours of timeline)
-  // This gives a better picture than just the current hour which may be incomplete
-  const recentCount = stats?.timeline?.slice(0, 6).reduce((sum, h) => sum + (h.count || 0), 0) || 0;
+  // Use recentCount from API (last 6 hours)
+  const recentCount = stats?.recentCount || 0;
 
   // Render loading skeleton state
   if (loading) {

@@ -238,9 +238,9 @@ app.get('/api/stats', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
-    // Build date filter - default to last 6 hours for performance
+    // Build date filter - show all time by default, filter only when explicitly requested
     const params = [];
-    let dateFilter = 'WHERE first_seen >= NOW() - INTERVAL \'6 hours\'';
+    let dateFilter = '';
     
     if (startDate && endDate) {
       dateFilter = 'WHERE first_seen >= $1 AND first_seen <= $2';
@@ -248,7 +248,7 @@ app.get('/api/stats', async (req, res) => {
     }
 
     // Run simple indexed queries in parallel for speed
-    const [totalResult, byTypeResult, byJurisdictionResult, jurisdictionsResult, byHourResult] = await Promise.all([
+    const [totalResult, byTypeResult, byJurisdictionResult, jurisdictionsResult, byHourResult, recentResult] = await Promise.all([
       // Total events
       pool.query(`SELECT COUNT(*) as total FROM events ${dateFilter}`, params),
       
@@ -275,7 +275,10 @@ app.get('/api/stats', async (req, res) => {
         FROM events ${dateFilter}
         GROUP BY DATE_TRUNC('hour', call_created)
         ORDER BY hour DESC
-        LIMIT 24`, params)
+        LIMIT 24`, params),
+      
+      // Recent activity (last 6 hours) - always calculated
+      pool.query(`SELECT COUNT(*) as count FROM events WHERE first_seen >= NOW() - INTERVAL '6 hours'`)
     ]);
 
     const stats = {
@@ -293,6 +296,7 @@ app.get('/api/stats', async (req, res) => {
         hour: row.hour,
         count: parseInt(row.count)
       })),
+      recentCount: parseInt(recentResult.rows[0].count),
       recentActivity: []
     };
 
