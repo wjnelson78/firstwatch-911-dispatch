@@ -656,7 +656,12 @@ export function UserFeed() {
                           <button
                             key={reaction.type}
                             onClick={() => handleReaction(post.id, reaction.type)}
-                            className="text-2xl hover:scale-125 transition-transform p-1.5 hover:bg-slate-700 rounded-full"
+                            className={cn(
+                              "text-2xl hover:scale-125 transition-all p-1.5 rounded-full",
+                              post.userReaction === reaction.type 
+                                ? "bg-slate-600 ring-2 ring-blue-400 scale-110" 
+                                : "hover:bg-slate-700"
+                            )}
                             title={reaction.label}
                           >
                             {reaction.emoji}
@@ -668,7 +673,7 @@ export function UserFeed() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleReaction(post.id, 'like')}
+                    onClick={() => handleReaction(post.id, post.userReaction || 'like')}
                     className={cn(
                       "w-full gap-2 transition-all duration-200 font-semibold",
                       post.userReaction 
