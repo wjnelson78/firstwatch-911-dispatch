@@ -69,6 +69,8 @@ export interface Stats {
   timeline: { hour: string; count: number }[];
   /** Recent activity breakdown by hour and type */
   recentActivity: { hour: string; event_type: string; count: number }[];
+  /** Count of events in the last 6 hours */
+  recentCount?: number;
 }
 
 /**
