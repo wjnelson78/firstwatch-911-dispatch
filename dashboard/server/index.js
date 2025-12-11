@@ -1,0 +1,350 @@
+/**
+ * Snohomish County 911 Dispatch API Server
+ * 
+ * Express.js REST API server that provides endpoints for accessing 911 dispatch
+ * data stored in PostgreSQL. This server powers the real-time dispatch dashboard
+ * with filtering, statistics, and live event streaming capabilities.
+ * 
+ * Endpoints:
+ *   GET /api/health        - Health check and database connection status
+ *   GET /api/dispatches    - Fetch dispatch events with filtering and pagination
+ *   GET /api/dispatches/latest - Fetch latest events for live updates
+ *   GET /api/stats         - Aggregate statistics (counts, jurisdictions, timeline)
+ *   GET /api/filters       - Available filter options (agencies, call types)
+ * 
+ * @author William Nelson
+ * @created December 2025
+ * @license MIT
+ * @repository https://github.com/wnelson/firstwatch.net
+ */
+
+import express from 'express';
+import cors from 'cors';
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
+
+const { Pool } = pg;
+
+// Initialize Express application
+const app = express();
+const PORT = process.env.PORT || 3002;
+
+/**
+ * PostgreSQL Connection Pool Configuration
+ * 
+ * Uses environment variables for secure credential management.
+ * Falls back to defaults for development environments.
+ */
+const pool = new Pool({
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT) || 5432,
+  database: process.env.DB_NAME || 'dispatch_911',
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  connectionTimeoutMillis: 5000,
+});
+
+// Verify database connection on server startup
+pool.query('SELECT NOW()').then(() => {
+  console.log('✅ Connected to PostgreSQL database');
+}).catch(err => {
+  console.error('❌ Database connection failed:', err.message);
+});
+
+// Middleware configuration
+app.use(cors());          // Enable CORS for frontend access
+app.use(express.json());  // Parse JSON request bodies
+
+/**
+ * Simple test endpoint for connectivity verification
+ * @route GET /api/test
+ */
+app.get('/api/test', (req, res) => {
+  res.json({ ok: true });
+});
+
+/**
+ * Fetch dispatch events with optional filtering and pagination
+ * 
+ * @route GET /api/dispatches
+ * @query {string} startDate - Filter events after this ISO date
+ * @query {string} endDate - Filter events before this ISO date
+ * @query {string} eventType - Filter by agency type (Police, Fire)
+ * @query {string} search - Full-text search across call_type, address, jurisdiction
+ * @query {number} limit - Maximum results to return (default: 100)
+ * @query {number} offset - Pagination offset (default: 0)
+ * @returns {Array<DispatchEvent>} Array of dispatch events
+ */
+app.get('/api/dispatches', async (req, res) => {
+  try {
+    const { 
+      startDate, 
+      endDate, 
+      eventType, 
+      search,
+      limit = 100,
+      offset = 0 
+    } = req.query;
+
+    let query = `
+      SELECT 
+        id,
+        event_id,
+        call_number,
+        address,
+        call_type,
+        units,
+        call_created,
+        jurisdiction,
+        agency_type,
+        longitude,
+        latitude,
+        first_seen,
+        last_seen,
+        times_seen
+      FROM events
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIndex = 1;
+
+    if (startDate) {
+      query += ` AND call_created >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND call_created <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    if (eventType && eventType !== 'all') {
+      query += ` AND LOWER(agency_type) = LOWER($${paramIndex})`;
+      params.push(eventType);
+      paramIndex++;
+    }
+
+    if (search) {
+      query += ` AND (
+        LOWER(call_type) LIKE LOWER($${paramIndex}) OR
+        LOWER(address) LIKE LOWER($${paramIndex}) OR
+        LOWER(jurisdiction) LIKE LOWER($${paramIndex}) OR
+        LOWER(units) LIKE LOWER($${paramIndex})
+      )`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY call_created DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+// Get statistics
+app.get('/api/stats', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = 'WHERE call_created >= $1 AND call_created <= $2';
+      params.push(startDate, endDate);
+    }
+
+    // Total events
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total FROM events ${dateFilter}`,
+      params
+    );
+
+    // Events by type (agency_type)
+    const byTypeResult = await pool.query(
+      `SELECT 
+        COALESCE(LOWER(agency_type), 'unknown') as event_type, 
+        COUNT(*) as count 
+       FROM events 
+       ${dateFilter}
+       GROUP BY LOWER(agency_type)`,
+      params
+    );
+
+    // Events by jurisdiction (top 10)
+    const byJurisdictionResult = await pool.query(
+      `SELECT 
+        COALESCE(jurisdiction, 'Unknown') as jurisdiction, 
+        COUNT(*) as count 
+       FROM events 
+       ${dateFilter}
+       GROUP BY jurisdiction
+       ORDER BY count DESC
+       LIMIT 10`,
+      params
+    );
+
+    // Unique jurisdictions
+    const jurisdictionsResult = await pool.query(
+      `SELECT COUNT(DISTINCT jurisdiction) as count FROM events ${dateFilter}`,
+      params
+    );
+
+    // Events by hour (for timeline)
+    const byHourResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('hour', call_created) as hour,
+        COUNT(*) as count
+       FROM events 
+       ${dateFilter}
+       GROUP BY DATE_TRUNC('hour', call_created)
+       ORDER BY hour DESC
+       LIMIT 48`,
+      params
+    );
+
+    // Recent activity (last 24 hours by hour)
+    const recentResult = await pool.query(
+      `SELECT 
+        DATE_TRUNC('hour', call_created) as hour,
+        COALESCE(LOWER(agency_type), 'unknown') as event_type,
+        COUNT(*) as count
+       FROM events 
+       WHERE call_created >= NOW() - INTERVAL '24 hours'
+       GROUP BY DATE_TRUNC('hour', call_created), LOWER(agency_type)
+       ORDER BY hour`
+    );
+
+    const stats = {
+      total: parseInt(totalResult.rows[0].total),
+      byType: byTypeResult.rows.reduce((acc, row) => {
+        acc[row.event_type] = parseInt(row.count);
+        return acc;
+      }, {}),
+      byJurisdiction: byJurisdictionResult.rows.map(row => ({
+        jurisdiction: row.jurisdiction,
+        count: parseInt(row.count)
+      })),
+      uniqueAgencies: parseInt(jurisdictionsResult.rows[0].count),
+      timeline: byHourResult.rows.map(row => ({
+        hour: row.hour,
+        count: parseInt(row.count)
+      })),
+      recentActivity: recentResult.rows
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// Get latest events (for live mode)
+app.get('/api/dispatches/latest', async (req, res) => {
+  try {
+    const { since, limit = 50 } = req.query;
+    
+    let query = `
+      SELECT 
+        id,
+        event_id,
+        call_number,
+        address,
+        call_type,
+        units,
+        call_created,
+        jurisdiction,
+        agency_type,
+        longitude,
+        latitude,
+        first_seen,
+        last_seen,
+        times_seen
+      FROM events
+    `;
+    
+    const params = [];
+    
+    if (since) {
+      query += ` WHERE last_seen > $1`;
+      params.push(since);
+    }
+    
+    query += ` ORDER BY call_created DESC LIMIT $${params.length + 1}`;
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching latest events:', error);
+    res.status(500).json({ error: 'Failed to fetch latest events' });
+  }
+});
+
+// Get unique values for filters with counts
+app.get('/api/filters', async (req, res) => {
+  try {
+    const agencyTypesResult = await pool.query(
+      `SELECT COALESCE(agency_type, 'Unknown') as agency_type, COUNT(*) as count
+       FROM events 
+       GROUP BY agency_type
+       ORDER BY count DESC`
+    );
+    
+    const jurisdictionsResult = await pool.query(
+      `SELECT jurisdiction, COUNT(*) as count
+       FROM events 
+       WHERE jurisdiction IS NOT NULL
+       GROUP BY jurisdiction
+       ORDER BY count DESC`
+    );
+
+    const callTypesResult = await pool.query(
+      `SELECT COALESCE(call_type, 'Unknown') as call_type, 
+              COALESCE(agency_type, 'Unknown') as agency_type,
+              COUNT(*) as count 
+       FROM events 
+       GROUP BY call_type, agency_type
+       ORDER BY count DESC
+       LIMIT 200`
+    );
+
+    res.json({
+      agencyTypes: agencyTypesResult.rows.map(r => ({ name: r.agency_type, count: parseInt(r.count) })),
+      jurisdictions: jurisdictionsResult.rows.map(r => ({ name: r.jurisdiction, count: parseInt(r.count) })),
+      callTypes: callTypesResult.rows.map(r => ({ 
+        name: r.call_type, 
+        agencyType: r.agency_type,
+        count: parseInt(r.count) 
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching filters:', error);
+    res.status(500).json({ error: 'Failed to fetch filters' });
+  }
+});
+
+// Health check
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', database: 'connected' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', database: 'disconnected' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 API Server running on http://localhost:${PORT}`);
+});
