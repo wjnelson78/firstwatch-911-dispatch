@@ -787,8 +787,28 @@ export function UserFeed() {
                           </div>
                           <div className="flex items-center gap-3 mt-1 ml-3 text-xs">
                             <span className="text-slate-500">{formatTime(comment.createdAt)}</span>
-                            <button className="text-slate-400 hover:underline font-semibold">Like</button>
-                            <button className="text-slate-400 hover:underline font-semibold">Reply</button>
+                            <button 
+                              className="text-slate-400 hover:underline font-semibold"
+                              onClick={() => {
+                                if (!user) {
+                                  document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
+                                }
+                              }}
+                              title={!user ? "Sign in to like" : "Like this comment"}
+                            >
+                              {!user ? "Like" : "Like"}
+                            </button>
+                            <button 
+                              className="text-slate-400 hover:underline font-semibold"
+                              onClick={() => {
+                                if (!user) {
+                                  document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
+                                }
+                              }}
+                              title={!user ? "Sign in to reply" : "Reply to this comment"}
+                            >
+                              {!user ? "Reply" : "Reply"}
+                            </button>
                             {(comment.likesCount ?? 0) > 0 && (
                               <span className="flex items-center gap-1 text-slate-500">
                                 <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-500 text-[8px]">👍</span>
