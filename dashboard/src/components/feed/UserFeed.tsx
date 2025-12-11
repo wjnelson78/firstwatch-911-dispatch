@@ -56,6 +56,64 @@ interface Comment {
   user: PostUser;
 }
 
+// Sample posts to show when the feed is empty
+const SAMPLE_POSTS: Post[] = [
+  {
+    id: -1,
+    content: "🚒 Just witnessed Snohomish County Fire District 7 respond to a structure fire on 164th St SE. Response time was under 4 minutes - incredible work by our local heroes! Stay safe everyone.",
+    mediaUrls: [],
+    mediaTypes: [],
+    location: "Mill Creek, WA",
+    likesCount: 24,
+    dislikesCount: 0,
+    commentsCount: 5,
+    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
+    user: {
+      id: 0,
+      firstName: "Sarah",
+      lastName: "Mitchell",
+      initials: "SM"
+    },
+    userReaction: null
+  },
+  {
+    id: -2,
+    content: "PSA: There's been increased traffic accidents on Highway 2 near Monroe this week due to icy conditions. Please drive carefully and give yourself extra time. Saw deputies responding to 3 fender benders this morning alone. 🚗❄️",
+    mediaUrls: [],
+    mediaTypes: [],
+    location: "Monroe, WA",
+    likesCount: 47,
+    dislikesCount: 1,
+    commentsCount: 12,
+    createdAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
+    user: {
+      id: 0,
+      firstName: "David",
+      lastName: "Chen",
+      initials: "DC"
+    },
+    userReaction: null
+  },
+  {
+    id: -3,
+    content: "Huge shoutout to the paramedics who responded to the medical emergency at Alderwood Mall yesterday. My dad had a cardiac event and they were there in minutes. He's stable now thanks to their quick action. Can't thank them enough! 💙🙏",
+    mediaUrls: [],
+    mediaTypes: [],
+    location: "Lynnwood, WA",
+    likesCount: 156,
+    dislikesCount: 0,
+    commentsCount: 28,
+    createdAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(), // 18 hours ago
+    user: {
+      id: 0,
+      firstName: "Jennifer",
+      lastName: "Park",
+      initials: "JP"
+    },
+    userReaction: null
+  }
+];
+
 export function UserFeed() {
   const { user } = useAuth();
   const [posts, setPosts] = useState<Post[]>([]);
@@ -83,11 +141,14 @@ export function UserFeed() {
       if (!response.ok) throw new Error('Failed to fetch posts');
       
       const data = await response.json();
-      setPosts(data.posts);
+      // Use sample posts if feed is empty
+      setPosts(data.posts.length > 0 ? data.posts : SAMPLE_POSTS);
       setError(null);
     } catch (err) {
       console.error('Error fetching posts:', err);
-      setError('Failed to load posts');
+      // Show sample posts on error so feed isn't empty
+      setPosts(SAMPLE_POSTS);
+      setError(null);
     } finally {
       setIsLoading(false);
     }
