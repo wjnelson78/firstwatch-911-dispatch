@@ -155,3 +155,125 @@ export async function checkHealth(): Promise<{ status: string; database: string 
   const response = await fetch(`${API_BASE}/health`);
   return response.json();
 }
+
+// ============================================================================
+// File Storage API
+// ============================================================================
+
+/**
+ * Base URL for the file storage service (MinIO proxy)
+ */
+const FILE_STORAGE_URL = import.meta.env.VITE_FILE_STORAGE_URL || 'http://172.16.32.206:3002';
+
+/**
+ * Response from file upload
+ */
+export interface FileUploadResponse {
+  success: boolean;
+  file: {
+    filename: string;
+    originalName: string;
+    bucket: string;
+    size: number;
+    mimetype: string;
+    url: string;
+  };
+}
+
+/**
+ * Response from multiple file upload
+ */
+export interface MultipleFileUploadResponse {
+  success: boolean;
+  files: FileUploadResponse['file'][];
+}
+
+/**
+ * Upload a single file to MinIO storage
+ * 
+ * @param file - File to upload
+ * @param bucket - Optional bucket override (defaults to auto-detection based on file type)
+ * @returns Promise resolving to upload response with file URL
+ */
+export async function uploadFile(file: File, bucket?: string): Promise<FileUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (bucket) formData.append('bucket', bucket);
+
+  const response = await fetch(`${FILE_STORAGE_URL}/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload file');
+  }
+
+  return response.json();
+}
+
+/**
+ * Upload multiple files to MinIO storage
+ * 
+ * @param files - Array of files to upload
+ * @param bucket - Optional bucket override
+ * @returns Promise resolving to upload response with file URLs
+ */
+export async function uploadFiles(files: File[], bucket?: string): Promise<MultipleFileUploadResponse> {
+  const formData = new FormData();
+  files.forEach(file => formData.append('files', file));
+  if (bucket) formData.append('bucket', bucket);
+
+  const response = await fetch(`${FILE_STORAGE_URL}/upload/multiple`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to upload files');
+  }
+
+  return response.json();
+}
+
+/**
+ * Delete a file from MinIO storage
+ * 
+ * @param bucket - Bucket containing the file
+ * @param filename - Name of file to delete
+ * @returns Promise resolving when file is deleted
+ */
+export async function deleteFile(bucket: string, filename: string): Promise<void> {
+  const response = await fetch(`${FILE_STORAGE_URL}/delete/${bucket}/${filename}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to delete file');
+  }
+}
+
+/**
+ * Get a presigned URL for temporary file access
+ * 
+ * @param bucket - Bucket containing the file
+ * @param filename - Name of file
+ * @param expiry - URL expiry time in seconds (default: 3600)
+ * @returns Promise resolving to presigned URL
+ */
+export async function getPresignedUrl(bucket: string, filename: string, expiry = 3600): Promise<string> {
+  const response = await fetch(
+    `${FILE_STORAGE_URL}/presigned-url?bucket=${bucket}&filename=${filename}&expiry=${expiry}`
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to get presigned URL');
+  }
+
+  const data = await response.json();
+  return data.url;
+}
