@@ -36,13 +36,25 @@ const __dirname = path.dirname(__filename);
 // Load environment variables from .env file
 dotenv.config();
 
-// Ensure uploads directory exists
+// MinIO Configuration
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || '172.16.32.206';
+const MINIO_PORT = parseInt(process.env.MINIO_PORT) || 9000;
+const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || 'firstwatch-admin';
+const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || 'FirstWatch911SecureStorage2025!';
+const MINIO_USE_SSL = process.env.MINIO_USE_SSL === 'true';
+const MINIO_BUCKET_IMAGES = process.env.MINIO_BUCKET_IMAGES || 'feed-images';
+const MINIO_BUCKET_VIDEOS = process.env.MINIO_BUCKET_VIDEOS || 'feed-videos';
+
+// MinIO public URL for serving files
+const MINIO_PUBLIC_URL = `http://${MINIO_ENDPOINT}:${MINIO_PORT}`;
+
+// Ensure uploads directory exists (for temporary storage before MinIO upload)
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Configure multer for file uploads
+// Configure multer for temporary file storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
@@ -67,7 +79,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB max
+    fileSize: 100 * 1024 * 1024, // 100MB max (increased for videos)
     files: 4 // Max 4 files per post
   }
 });
@@ -761,7 +773,7 @@ app.get('/api/feed/posts', optionalAuth, async (req, res) => {
 });
 
 /**
- * Upload media files for posts
+ * Upload media files for posts to MinIO storage
  * 
  * @route POST /api/feed/upload
  * @returns {Object} { urls: string[], types: string[] }
@@ -772,9 +784,61 @@ app.post('/api/feed/upload', authenticateToken, upload.array('media', 4), async 
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const baseUrl = process.env.API_BASE_URL || `http://localhost:${PORT}`;
-    const urls = req.files.map(file => `${baseUrl}/uploads/${file.filename}`);
-    const types = req.files.map(file => file.mimetype.startsWith('video/') ? 'video' : 'image');
+    const urls = [];
+    const types = [];
+
+    // Upload each file to MinIO
+    for (const file of req.files) {
+      const isVideo = file.mimetype.startsWith('video/');
+      const bucket = isVideo ? MINIO_BUCKET_VIDEOS : MINIO_BUCKET_IMAGES;
+      const type = isVideo ? 'video' : 'image';
+      
+      // Generate unique filename
+      const ext = path.extname(file.originalname);
+      const filename = `${Date.now()}-${Math.random().toString(36).substring(7)}${ext}`;
+      
+      try {
+        // Upload to MinIO via file-storage service
+        const FormData = (await import('form-data')).default;
+        const formData = new FormData();
+        formData.append('file', fs.createReadStream(file.path), {
+          filename: file.originalname,
+          contentType: file.mimetype
+        });
+        formData.append('bucket', bucket);
+
+        const uploadResponse = await fetch(`http://${MINIO_ENDPOINT}:3002/upload`, {
+          method: 'POST',
+          body: formData,
+          headers: formData.getHeaders()
+        });
+
+        if (uploadResponse.ok) {
+          const data = await uploadResponse.json();
+          urls.push(data.file.url);
+          types.push(type);
+        } else {
+          console.error('MinIO upload failed:', await uploadResponse.text());
+          // Fallback to local storage
+          const localUrl = `${process.env.API_BASE_URL || `http://localhost:${PORT}`}/uploads/${file.filename}`;
+          urls.push(localUrl);
+          types.push(type);
+        }
+      } catch (uploadError) {
+        console.error('Error uploading to MinIO:', uploadError);
+        // Fallback to local storage
+        const localUrl = `${process.env.API_BASE_URL || `http://localhost:${PORT}`}/uploads/${file.filename}`;
+        urls.push(localUrl);
+        types.push(type);
+      }
+      
+      // Clean up temp file after MinIO upload
+      try {
+        fs.unlinkSync(file.path);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
 
     res.json({ urls, types });
   } catch (error) {
