@@ -153,6 +153,9 @@ export function Dashboard() {
   /** Currently selected event for detail modal */
   const [selectedEvent, setSelectedEvent] = useState<DispatchEvent | null>(null);
   
+  /** Event data to pre-fill in feed post or incident report */
+  const [prefilledEvent, setPrefilledEvent] = useState<DispatchEvent | null>(null);
+  
   /** Whether analytics panel is expanded */
   const [showAnalytics, setShowAnalytics] = useState(false);
   
@@ -1115,12 +1118,18 @@ export function Dashboard() {
 
         {/* === USER FEED VIEW === */}
         {activeView === 'feed' && (
-          <UserFeed />
+          <UserFeed 
+            prefilledEvent={prefilledEvent}
+            onEventHandled={() => setPrefilledEvent(null)}
+          />
         )}
 
         {/* === INCIDENT REPORT VIEW === */}
         {activeView === 'report' && (
-          <IncidentReport />
+          <IncidentReport 
+            prefilledEvent={prefilledEvent}
+            onEventHandled={() => setPrefilledEvent(null)}
+          />
         )}
 
         {/* === PRIVATE CHAT VIEW === */}
@@ -1144,6 +1153,10 @@ export function Dashboard() {
         event={selectedEvent}
         open={!!selectedEvent}
         onClose={() => setSelectedEvent(null)}
+        onNavigate={(view, eventData) => {
+          setPrefilledEvent(eventData);
+          handleViewChange(view as ActiveView);
+        }}
       />
     </div>
   );

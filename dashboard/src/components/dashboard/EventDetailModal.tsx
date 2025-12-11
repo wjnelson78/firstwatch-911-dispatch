@@ -25,11 +25,11 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
 import { 
   MapPin, 
   Clock, 
   Radio, 
-  Phone, 
   Building2, 
   Hash, 
   CalendarDays,
@@ -38,7 +38,9 @@ import {
   Shield,
   Flame,
   Ambulance,
-  AlertTriangle
+  AlertTriangle,
+  MessageSquarePlus,
+  FileWarning
 } from 'lucide-react';
 import type { DispatchEvent } from '@/types/dispatch';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -53,6 +55,8 @@ interface EventDetailModalProps {
   open: boolean;
   /** Callback to close the modal */
   onClose: () => void;
+  /** Callback to navigate to a view with pre-filled event data */
+  onNavigate?: (view: string, eventData: DispatchEvent) => void;
 }
 
 /**
@@ -64,9 +68,19 @@ interface EventDetailModalProps {
  * @param props - Component props
  * @returns Modal dialog component or null if no event selected
  */
-export function EventDetailModal({ event, open, onClose }: EventDetailModalProps) {
+export function EventDetailModal({ event, open, onClose, onNavigate }: EventDetailModalProps) {
   // Don't render if no event is selected
   if (!event) return null;
+
+  const handleCreatePost = () => {
+    onNavigate?.('feed', event);
+    onClose();
+  };
+
+  const handleReportIncident = () => {
+    onNavigate?.('report', event);
+    onClose();
+  };
 
   // Determine agency type for styling
   const isPolice = event.agency_type === 'Police';
@@ -195,11 +209,36 @@ export function EventDetailModal({ event, open, onClose }: EventDetailModalProps
                 value={event.jurisdiction}
               />
 
-              <DetailRow 
-                icon={<Phone className="h-4 w-4" />}
-                label="Event ID"
-                value={event.event_id}
-              />
+              {/* Actions */}
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mt-4">
+                Actions
+              </h3>
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="justify-start gap-2 h-auto py-3"
+                  onClick={handleCreatePost}
+                >
+                  <MessageSquarePlus className="h-4 w-4 text-blue-500" />
+                  <div className="text-left">
+                    <p className="font-medium">Post to Community Feed</p>
+                    <p className="text-xs text-muted-foreground">Share updates with the community</p>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="justify-start gap-2 h-auto py-3"
+                  onClick={handleReportIncident}
+                >
+                  <FileWarning className="h-4 w-4 text-orange-500" />
+                  <div className="text-left">
+                    <p className="font-medium">Report Incident</p>
+                    <p className="text-xs text-muted-foreground">Create a detailed incident report</p>
+                  </div>
+                </Button>
+              </div>
             </div>
 
             {/* Time Information */}

@@ -41,6 +41,7 @@ import {
   AlertOctagon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { DispatchEvent } from '@/types/dispatch';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -129,7 +130,12 @@ const initialFormData: IncidentFormData = {
   witnessInfo: ''
 };
 
-export function IncidentReport() {
+interface IncidentReportProps {
+  prefilledEvent?: DispatchEvent | null;
+  onEventHandled?: () => void;
+}
+
+export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentReportProps) {
   const { user } = useAuth();
   const [formData, setFormData] = useState<IncidentFormData>({
     ...initialFormData,
@@ -155,6 +161,39 @@ export function IncidentReport() {
       reporterEmail: user?.email || prev.reporterEmail
     }));
   }, [user]);
+
+  // Pre-fill form from dispatch event
+  useEffect(() => {
+    if (prefilledEvent) {
+      const eventDate = new Date(prefilledEvent.call_created);
+      setFormData(prev => ({
+        ...prev,
+        incidentType: mapCallTypeToIncidentType(prefilledEvent.call_type),
+        incidentDate: eventDate.toISOString().split('T')[0],
+        incidentTime: eventDate.toTimeString().slice(0, 5),
+        locationAddress: prefilledEvent.address,
+        locationCity: prefilledEvent.jurisdiction,
+        description: `Linked to dispatch call: ${prefilledEvent.call_type}\n\nCall Number: ${prefilledEvent.call_number}\nAgency: ${prefilledEvent.agency_type}${prefilledEvent.units ? `\nUnits: ${prefilledEvent.units}` : ''}\n\n`
+      }));
+      onEventHandled?.();
+    }
+  }, [prefilledEvent, onEventHandled]);
+
+  // Map dispatch call types to incident types
+  function mapCallTypeToIncidentType(callType: string): string {
+    const lowerType = callType.toLowerCase();
+    if (lowerType.includes('theft') || lowerType.includes('burglary') || lowerType.includes('robbery')) return 'Theft/Burglary';
+    if (lowerType.includes('vandal')) return 'Vandalism';
+    if (lowerType.includes('suspicious')) return 'Suspicious Activity';
+    if (lowerType.includes('traffic') || lowerType.includes('accident') || lowerType.includes('collision')) return 'Traffic Incident';
+    if (lowerType.includes('noise')) return 'Noise Complaint';
+    if (lowerType.includes('animal') || lowerType.includes('dog') || lowerType.includes('cat')) return 'Animal Related';
+    if (lowerType.includes('assault')) return 'Assault';
+    if (lowerType.includes('domestic')) return 'Domestic Disturbance';
+    if (lowerType.includes('missing')) return 'Missing Person';
+    if (lowerType.includes('trespass')) return 'Trespassing';
+    return 'Other';
+  }
 
   // File upload handlers
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {

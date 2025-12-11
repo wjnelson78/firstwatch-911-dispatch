@@ -28,6 +28,7 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
+import type { DispatchEvent } from '@/types/dispatch';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -156,7 +157,12 @@ const SAMPLE_COMMENTS: Record<number, Comment[]> = {
   ]
 };
 
-export function UserFeed() {
+interface UserFeedProps {
+  prefilledEvent?: DispatchEvent | null;
+  onEventHandled?: () => void;
+}
+
+export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
   const { user } = useAuth();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -170,6 +176,15 @@ export function UserFeed() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [hoveredReaction, setHoveredReaction] = useState<number | null>(null);
+
+  // Pre-fill post content from dispatch event
+  useEffect(() => {
+    if (prefilledEvent) {
+      const prefillContent = `📢 ${prefilledEvent.call_type}\n\n📍 Location: ${prefilledEvent.address}, ${prefilledEvent.jurisdiction}\n🏢 Agency: ${prefilledEvent.agency_type}${prefilledEvent.units ? `\n🚔 Units: ${prefilledEvent.units}` : ''}\n\n`;
+      setNewPostContent(prefillContent);
+      onEventHandled?.();
+    }
+  }, [prefilledEvent, onEventHandled]);
 
   // Fetch posts
   const fetchPosts = useCallback(async () => {
