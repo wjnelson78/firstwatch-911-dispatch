@@ -171,8 +171,32 @@ export function Dashboard() {
   /** Date range filter - end date */
   const [endDate, setEndDate] = useState<string>('');
 
-  /** Currently active view/section */
-  const [activeView, setActiveView] = useState<ActiveView>('dispatch');
+  /** Currently active view/section - initialize from URL hash */
+  const getInitialView = (): ActiveView => {
+    const hash = window.location.hash.slice(1); // Remove the #
+    const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat'];
+    return validViews.includes(hash as ActiveView) ? (hash as ActiveView) : 'dispatch';
+  };
+  const [activeView, setActiveView] = useState<ActiveView>(getInitialView);
+
+  // Update URL hash when view changes
+  const handleViewChange = useCallback((view: ActiveView) => {
+    setActiveView(view);
+    window.location.hash = view;
+  }, []);
+
+  // Listen for browser back/forward navigation
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.slice(1);
+      const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat'];
+      if (validViews.includes(hash as ActiveView)) {
+        setActiveView(hash as ActiveView);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   // ============================================================================
   // Pagination & Sorting State
@@ -516,7 +540,7 @@ export function Dashboard() {
       </header>
 
       {/* Main Navigation */}
-      <MainNav activeView={activeView} onViewChange={setActiveView} />
+      <MainNav activeView={activeView} onViewChange={handleViewChange} />
 
       {/* Main Content */}
       <main className="container py-6 space-y-6 relative z-10">
