@@ -238,12 +238,16 @@ app.get('/api/stats', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
-    let dateFilter = '';
+    // Default to last 24 hours if no date range specified (performance optimization)
     const params = [];
+    let dateFilter = '';
     
     if (startDate && endDate) {
       dateFilter = 'WHERE call_created >= $1 AND call_created <= $2';
       params.push(startDate, endDate);
+    } else {
+      // Default: last 24 hours for performance with large datasets
+      dateFilter = 'WHERE call_created >= NOW() - INTERVAL \'24 hours\'';
     }
 
     // Create deduplicated CTE for accurate stats
