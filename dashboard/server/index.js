@@ -238,95 +238,45 @@ app.get('/api/stats', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
-    // Default to last 24 hours if no date range specified (performance optimization)
+    // Build date filter - default to last 6 hours for performance
     const params = [];
-    let dateFilter = '';
+    let dateFilter = 'WHERE first_seen >= NOW() - INTERVAL \'6 hours\'';
     
     if (startDate && endDate) {
-      dateFilter = 'WHERE call_created >= $1 AND call_created <= $2';
+      dateFilter = 'WHERE first_seen >= $1 AND first_seen <= $2';
       params.push(startDate, endDate);
-    } else {
-      // Default: last 24 hours for performance with large datasets
-      dateFilter = 'WHERE call_created >= NOW() - INTERVAL \'24 hours\'';
     }
 
-    // Create deduplicated CTE for accurate stats
-    const deduplicatedCTE = `
-      WITH deduplicated AS (
-        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
-          id, call_type, address, call_created, jurisdiction, agency_type
-        FROM events
-        ${dateFilter}
-        ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
-      )
-    `;
-
-    // Total events (deduplicated)
-    const totalResult = await pool.query(
-      `${deduplicatedCTE} SELECT COUNT(*) as total FROM deduplicated`,
-      params
-    );
-
-    // Events by type (agency_type) - deduplicated
-    const byTypeResult = await pool.query(
-      `${deduplicatedCTE}
-       SELECT 
-        COALESCE(LOWER(agency_type), 'unknown') as event_type, 
-        COUNT(*) as count 
-       FROM deduplicated 
-       GROUP BY LOWER(agency_type)`,
-      params
-    );
-
-    // Events by jurisdiction (top 10) - deduplicated
-    const byJurisdictionResult = await pool.query(
-      `${deduplicatedCTE}
-       SELECT 
-        COALESCE(jurisdiction, 'Unknown') as jurisdiction, 
-        COUNT(*) as count 
-       FROM deduplicated 
-       GROUP BY jurisdiction
-       ORDER BY count DESC
-       LIMIT 10`,
-      params
-    );
-
-    // Unique jurisdictions - deduplicated
-    const jurisdictionsResult = await pool.query(
-      `${deduplicatedCTE} SELECT COUNT(DISTINCT jurisdiction) as count FROM deduplicated`,
-      params
-    );
-
-    // Events by hour (for timeline) - deduplicated
-    const byHourResult = await pool.query(
-      `${deduplicatedCTE}
-       SELECT 
-        DATE_TRUNC('hour', call_created) as hour,
-        COUNT(*) as count
-       FROM deduplicated 
-       GROUP BY DATE_TRUNC('hour', call_created)
-       ORDER BY hour DESC
-       LIMIT 48`,
-      params
-    );
-
-    // Recent activity (last 24 hours by hour) - deduplicated
-    const recentResult = await pool.query(
-      `WITH recent_deduplicated AS (
-        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
-          call_created, agency_type
-        FROM events 
-        WHERE call_created >= NOW() - INTERVAL '24 hours'
-        ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
-      )
-       SELECT 
-        DATE_TRUNC('hour', call_created) as hour,
-        COALESCE(LOWER(agency_type), 'unknown') as event_type,
-        COUNT(*) as count
-       FROM recent_deduplicated 
-       GROUP BY DATE_TRUNC('hour', call_created), LOWER(agency_type)
-       ORDER BY hour`
-    );
+    // Run simple indexed queries in parallel for speed
+    const [totalResult, byTypeResult, byJurisdictionResult, jurisdictionsResult, byHourResult] = await Promise.all([
+      // Total events
+      pool.query(`SELECT COUNT(*) as total FROM events ${dateFilter}`, params),
+      
+      // Events by agency type
+      pool.query(`
+        SELECT COALESCE(LOWER(agency_type), 'unknown') as event_type, COUNT(*) as count 
+        FROM events ${dateFilter}
+        GROUP BY LOWER(agency_type)`, params),
+      
+      // Events by jurisdiction (top 10)
+      pool.query(`
+        SELECT COALESCE(jurisdiction, 'Unknown') as jurisdiction, COUNT(*) as count 
+        FROM events ${dateFilter}
+        GROUP BY jurisdiction
+        ORDER BY count DESC
+        LIMIT 10`, params),
+      
+      // Unique jurisdictions count
+      pool.query(`SELECT COUNT(DISTINCT jurisdiction) as count FROM events ${dateFilter}`, params),
+      
+      // Events by hour (for timeline)
+      pool.query(`
+        SELECT DATE_TRUNC('hour', call_created) as hour, COUNT(*) as count
+        FROM events ${dateFilter}
+        GROUP BY DATE_TRUNC('hour', call_created)
+        ORDER BY hour DESC
+        LIMIT 24`, params)
+    ]);
 
     const stats = {
       total: parseInt(totalResult.rows[0].total),
@@ -343,7 +293,7 @@ app.get('/api/stats', async (req, res) => {
         hour: row.hour,
         count: parseInt(row.count)
       })),
-      recentActivity: recentResult.rows
+      recentActivity: []
     };
 
     res.json(stats);
