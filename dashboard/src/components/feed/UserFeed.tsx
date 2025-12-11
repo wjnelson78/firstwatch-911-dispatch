@@ -644,23 +644,25 @@ export function UserFeed() {
               <div className="flex items-center gap-1 relative">
                 {/* Like button with reaction picker on hover */}
                 <div 
-                  className="flex-1 relative"
+                  className="flex-1 relative group"
                   onMouseEnter={() => setHoveredReaction(post.id)}
                   onMouseLeave={() => setHoveredReaction(null)}
                 >
                   {/* Emoji reaction picker popup */}
                   {hoveredReaction === post.id && (
-                    <div className="absolute bottom-full left-0 mb-2 bg-slate-800 rounded-full shadow-lg border border-slate-700 px-2 py-1 flex gap-1 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                      {REACTIONS.map((reaction) => (
-                        <button
-                          key={reaction.type}
-                          onClick={() => handleReaction(post.id, reaction.type)}
-                          className="text-2xl hover:scale-125 transition-transform p-1 hover:bg-slate-700 rounded-full"
-                          title={reaction.label}
-                        >
-                          {reaction.emoji}
-                        </button>
-                      ))}
+                    <div className="absolute bottom-full left-0 pb-2 z-50">
+                      <div className="bg-slate-800 rounded-full shadow-lg border border-slate-700 px-2 py-1.5 flex gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                        {REACTIONS.map((reaction) => (
+                          <button
+                            key={reaction.type}
+                            onClick={() => handleReaction(post.id, reaction.type)}
+                            className="text-2xl hover:scale-125 transition-transform p-1.5 hover:bg-slate-700 rounded-full"
+                            title={reaction.label}
+                          >
+                            {reaction.emoji}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                   <Button
@@ -670,9 +672,11 @@ export function UserFeed() {
                     className={cn(
                       "w-full gap-2 transition-all duration-200 font-semibold",
                       post.userReaction 
-                        ? post.userReaction === 'love' ? "text-red-500 bg-red-500/10" 
-                          : post.userReaction === 'like' ? "text-blue-500 bg-blue-500/10"
-                          : "text-yellow-500 bg-yellow-500/10"
+                        ? post.userReaction === 'love' ? "text-red-500 bg-red-500/10 hover:bg-red-500/20" 
+                          : post.userReaction === 'like' ? "text-blue-500 bg-blue-500/10 hover:bg-blue-500/20"
+                          : post.userReaction === 'haha' || post.userReaction === 'wow' || post.userReaction === 'sad' || post.userReaction === 'care' ? "text-yellow-500 bg-yellow-500/10 hover:bg-yellow-500/20"
+                          : post.userReaction === 'angry' ? "text-orange-500 bg-orange-500/10 hover:bg-orange-500/20"
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
                         : "text-slate-400 hover:text-white hover:bg-slate-700"
                     )}
                   >
