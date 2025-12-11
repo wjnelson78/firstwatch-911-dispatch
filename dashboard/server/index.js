@@ -1029,7 +1029,7 @@ app.get('/api/feed/posts/:id/comments', async (req, res) => {
 
     // Build nested comment structure
     const commentsMap = new Map();
-    const rootComments: any[] = [];
+    const rootComments = [];
 
     // First pass: create all comment objects
     result.rows.forEach(row => {
