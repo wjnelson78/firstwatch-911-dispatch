@@ -2,7 +2,8 @@
  * User Feed Component
  * 
  * Social media-style feed where users can post messages, photos, videos,
- * and interact with other community members through likes and comments.
+ * and interact with other community members through reactions and comments.
+ * Styled to match Facebook's familiar interface.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -10,23 +11,38 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getAccessToken } from '@/services/auth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { 
   ThumbsUp, 
-  ThumbsDown, 
   MessageCircle, 
+  Share2,
   Send, 
   MapPin,
   MoreHorizontal,
   X,
   Camera,
-  Users
+  Users,
+  Smile,
+  Image
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { Input } from '@/components/ui/input';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+// Reaction types with emojis
+type ReactionType = 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry' | null;
+
+const REACTIONS = [
+  { type: 'like' as const, emoji: '👍', label: 'Like', color: 'text-blue-500' },
+  { type: 'love' as const, emoji: '❤️', label: 'Love', color: 'text-red-500' },
+  { type: 'care' as const, emoji: '🥰', label: 'Care', color: 'text-orange-400' },
+  { type: 'haha' as const, emoji: '😂', label: 'Haha', color: 'text-yellow-400' },
+  { type: 'wow' as const, emoji: '😮', label: 'Wow', color: 'text-yellow-400' },
+  { type: 'sad' as const, emoji: '😢', label: 'Sad', color: 'text-yellow-400' },
+  { type: 'angry' as const, emoji: '😡', label: 'Angry', color: 'text-orange-500' },
+];
 
 interface PostUser {
   id: number;
@@ -46,7 +62,9 @@ interface Post {
   commentsCount: number;
   createdAt: string;
   user: PostUser;
-  userReaction: 'like' | 'dislike' | null;
+  userReaction: ReactionType;
+  // New: track reaction breakdown
+  reactions?: { type: string; count: number }[];
 }
 
 interface Comment {
@@ -54,6 +72,8 @@ interface Comment {
   content: string;
   createdAt: string;
   user: PostUser;
+  likesCount?: number;
+  userLiked?: boolean;
 }
 
 // Sample posts to show when the feed is empty
@@ -127,6 +147,7 @@ export function UserFeed() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [hoveredReaction, setHoveredReaction] = useState<number | null>(null);
 
   // Fetch posts
   const fetchPosts = useCallback(async () => {
@@ -225,8 +246,8 @@ export function UserFeed() {
     }
   };
 
-  // Handle reaction (like/dislike) - toggle off if clicking same reaction
-  const handleReaction = async (postId: number, reactionType: 'like' | 'dislike') => {
+  // Handle reaction - Facebook style with emoji reactions
+  const handleReaction = async (postId: number, reactionType: ReactionType) => {
     const accessToken = getAccessToken();
     if (!accessToken) {
       // Prompt user to sign in
@@ -243,19 +264,20 @@ export function UserFeed() {
     
     // Calculate new counts optimistically
     let newLikesCount = post.likesCount;
-    let newDislikesCount = post.dislikesCount;
     
-    if (post.userReaction === 'like') newLikesCount--;
-    if (post.userReaction === 'dislike') newDislikesCount--;
-    if (newReaction === 'like') newLikesCount++;
-    if (newReaction === 'dislike') newDislikesCount++;
+    // If user had a reaction, decrement count
+    if (post.userReaction) newLikesCount--;
+    // If setting a new reaction, increment count
+    if (newReaction) newLikesCount++;
     
     // Update UI immediately
     setPosts(prev => prev.map(p => 
       p.id === postId 
-        ? { ...p, likesCount: newLikesCount, dislikesCount: newDislikesCount, userReaction: newReaction }
+        ? { ...p, likesCount: newLikesCount, userReaction: newReaction }
         : p
     ));
+    
+    setHoveredReaction(null);
     
     // For sample posts (negative IDs), don't make API call
     if (postId < 0) return;
@@ -267,7 +289,7 @@ export function UserFeed() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`
         },
-        body: JSON.stringify({ reactionType: newReaction })
+        body: JSON.stringify({ reactionType: newReaction || 'like' })
       });
       
       if (!response.ok) throw new Error('Failed to react');
@@ -275,7 +297,7 @@ export function UserFeed() {
       const data = await response.json();
       setPosts(prev => prev.map(p => 
         p.id === postId 
-          ? { ...p, likesCount: data.likesCount, dislikesCount: data.dislikesCount, userReaction: data.userReaction }
+          ? { ...p, likesCount: data.likesCount, userReaction: data.userReaction }
           : p
       ));
     } catch (err) {
@@ -596,24 +618,13 @@ export function UserFeed() {
               {/* Post Stats - Facebook style */}
               <div className="flex items-center justify-between text-sm text-slate-500 mb-3">
                 <div className="flex items-center gap-2">
-                  {(post.likesCount > 0 || post.dislikesCount > 0) && (
+                  {post.likesCount > 0 && (
                     <div className="flex items-center gap-1">
-                      {post.likesCount > 0 && (
-                        <span className="flex items-center gap-1">
-                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow-500">
-                            <ThumbsUp className="h-3 w-3 text-white" />
-                          </span>
-                          {post.likesCount}
-                        </span>
-                      )}
-                      {post.dislikesCount > 0 && (
-                        <span className="flex items-center gap-1 ml-1">
-                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500">
-                            <ThumbsDown className="h-3 w-3 text-white" />
-                          </span>
-                          {post.dislikesCount}
-                        </span>
-                      )}
+                      <div className="flex -space-x-1">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-xs border-2 border-slate-900">👍</span>
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-xs border-2 border-slate-900">❤️</span>
+                      </div>
+                      <span className="ml-1 hover:underline cursor-pointer">{post.likesCount}</span>
                     </div>
                   )}
                 </div>
@@ -629,48 +640,61 @@ export function UserFeed() {
 
               <Separator className="bg-slate-700 mb-3" />
 
-              {/* Post Actions - Facebook style */}
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleReaction(post.id, 'like')}
-                  className={cn(
-                    "flex-1 gap-2 transition-all duration-200",
-                    post.userReaction === 'like' 
-                      ? "text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20" 
-                      : "text-slate-400 hover:text-white hover:bg-slate-700"
-                  )}
+              {/* Post Actions - Facebook style with emoji reaction picker */}
+              <div className="flex items-center gap-1 relative">
+                {/* Like button with reaction picker on hover */}
+                <div 
+                  className="flex-1 relative"
+                  onMouseEnter={() => setHoveredReaction(post.id)}
+                  onMouseLeave={() => setHoveredReaction(null)}
                 >
-                  <ThumbsUp className={cn(
-                    "h-4 w-4 transition-transform",
-                    post.userReaction === 'like' && "fill-current scale-110"
-                  )} />
-                  Like
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleReaction(post.id, 'dislike')}
-                  className={cn(
-                    "flex-1 gap-2 transition-all duration-200",
-                    post.userReaction === 'dislike' 
-                      ? "text-red-400 bg-red-500/10 hover:bg-red-500/20" 
-                      : "text-slate-400 hover:text-white hover:bg-slate-700"
+                  {/* Emoji reaction picker popup */}
+                  {hoveredReaction === post.id && (
+                    <div className="absolute bottom-full left-0 mb-2 bg-slate-800 rounded-full shadow-lg border border-slate-700 px-2 py-1 flex gap-1 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                      {REACTIONS.map((reaction) => (
+                        <button
+                          key={reaction.type}
+                          onClick={() => handleReaction(post.id, reaction.type)}
+                          className="text-2xl hover:scale-125 transition-transform p-1 hover:bg-slate-700 rounded-full"
+                          title={reaction.label}
+                        >
+                          {reaction.emoji}
+                        </button>
+                      ))}
+                    </div>
                   )}
-                >
-                  <ThumbsDown className={cn(
-                    "h-4 w-4 transition-transform",
-                    post.userReaction === 'dislike' && "fill-current scale-110"
-                  )} />
-                  Dislike
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleReaction(post.id, 'like')}
+                    className={cn(
+                      "w-full gap-2 transition-all duration-200 font-semibold",
+                      post.userReaction 
+                        ? post.userReaction === 'love' ? "text-red-500 bg-red-500/10" 
+                          : post.userReaction === 'like' ? "text-blue-500 bg-blue-500/10"
+                          : "text-yellow-500 bg-yellow-500/10"
+                        : "text-slate-400 hover:text-white hover:bg-slate-700"
+                    )}
+                  >
+                    {post.userReaction ? (
+                      <>
+                        <span className="text-lg">{REACTIONS.find(r => r.type === post.userReaction)?.emoji || '👍'}</span>
+                        {REACTIONS.find(r => r.type === post.userReaction)?.label || 'Like'}
+                      </>
+                    ) : (
+                      <>
+                        <ThumbsUp className="h-4 w-4" />
+                        Like
+                      </>
+                    )}
+                  </Button>
+                </div>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => toggleComments(post.id)}
                   className={cn(
-                    "flex-1 gap-2",
+                    "flex-1 gap-2 font-semibold",
                     expandedComments.has(post.id)
                       ? "text-purple-400 bg-purple-500/10"
                       : "text-slate-400 hover:text-white hover:bg-slate-700"
@@ -679,11 +703,64 @@ export function UserFeed() {
                   <MessageCircle className="h-4 w-4" />
                   Comment
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="flex-1 gap-2 text-slate-400 hover:text-white hover:bg-slate-700 font-semibold"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </Button>
               </div>
 
-              {/* Comments Section - Facebook style, always show input */}
+              {/* Comments Section - Facebook style */}
               <div className="mt-3 space-y-3">
-                {/* Comment Input - Always visible like Facebook */}
+                {/* View more comments link */}
+                {!expandedComments.has(post.id) && post.commentsCount > 0 && (
+                  <button
+                    onClick={() => toggleComments(post.id)}
+                    className="text-sm text-slate-400 hover:underline font-semibold"
+                  >
+                    View {post.commentsCount > 1 ? `all ${post.commentsCount} comments` : '1 comment'}
+                  </button>
+                )}
+
+                {/* Existing Comments */}
+                {expandedComments.has(post.id) && postComments[post.id]?.length > 0 && (
+                  <div className="space-y-3">
+                    {postComments[post.id].map(comment => (
+                      <div key={comment.id} className="flex gap-2">
+                        <div className={cn(
+                          "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
+                          getAvatarColor(comment.user.id)
+                        )}>
+                          {comment.user.initials}
+                        </div>
+                        <div className="flex-1">
+                          <div className="inline-block bg-slate-800 rounded-2xl px-3 py-2 max-w-[90%]">
+                            <p className="text-[13px] font-semibold text-white hover:underline cursor-pointer">
+                              {comment.user.firstName} {comment.user.lastName}
+                            </p>
+                            <p className="text-[15px] text-slate-200">{comment.content}</p>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 ml-3 text-xs">
+                            <span className="text-slate-500">{formatTime(comment.createdAt)}</span>
+                            <button className="text-slate-400 hover:underline font-semibold">Like</button>
+                            <button className="text-slate-400 hover:underline font-semibold">Reply</button>
+                            {(comment.likesCount ?? 0) > 0 && (
+                              <span className="flex items-center gap-1 text-slate-500">
+                                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-500 text-[8px]">👍</span>
+                                {comment.likesCount}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Comment Input - Facebook style */}
                 <div className="flex gap-2">
                   {user ? (
                     <>
@@ -697,8 +774,8 @@ export function UserFeed() {
                         <Input
                           value={newComments[post.id] || ''}
                           onChange={(e) => setNewComments(prev => ({ ...prev, [post.id]: e.target.value }))}
-                          placeholder="Write a comment..."
-                          className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 rounded-full pr-10"
+                          placeholder={`Comment as ${user.firstName} ${user.lastName}`}
+                          className="bg-slate-800 border-0 text-white placeholder:text-slate-500 rounded-full pr-24 focus-visible:ring-1 focus-visible:ring-slate-600"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
@@ -711,64 +788,37 @@ export function UserFeed() {
                             }
                           }}
                         />
-                        {newComments[post.id]?.trim() && (
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => handleAddComment(post.id)}
-                            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-purple-400 hover:text-purple-300 hover:bg-transparent"
-                          >
-                            <Send className="h-4 w-4" />
-                          </Button>
-                        )}
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                          <button className="p-1 text-slate-500 hover:text-slate-300" title="Emoji">
+                            <Smile className="h-4 w-4" />
+                          </button>
+                          <button className="p-1 text-slate-500 hover:text-slate-300" title="Camera">
+                            <Camera className="h-4 w-4" />
+                          </button>
+                          <button className="p-1 text-slate-500 hover:text-slate-300" title="GIF">
+                            <Image className="h-4 w-4" />
+                          </button>
+                          {newComments[post.id]?.trim() && (
+                            <button 
+                              onClick={() => handleAddComment(post.id)}
+                              className="p-1 text-purple-400 hover:text-purple-300"
+                              title="Send"
+                            >
+                              <Send className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </>
                   ) : (
-                    <div 
-                      className="flex-1 bg-slate-800/50 border border-slate-700 rounded-full px-4 py-2 text-slate-500 cursor-pointer hover:bg-slate-800"
+                    <button 
+                      className="flex-1 bg-slate-800 rounded-full px-4 py-2 text-sm text-slate-500 text-left hover:bg-slate-700"
                       onClick={() => document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click()}
                     >
                       Sign in to comment...
-                    </div>
+                    </button>
                   )}
                 </div>
-
-                {/* Existing Comments */}
-                {expandedComments.has(post.id) && postComments[post.id]?.length > 0 && (
-                  <div className="space-y-2 pl-2">
-                    {postComments[post.id].map(comment => (
-                      <div key={comment.id} className="flex gap-2">
-                        <div className={cn(
-                          "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
-                          getAvatarColor(comment.user.id)
-                        )}>
-                          {comment.user.initials}
-                        </div>
-                        <div className="flex-1">
-                          <div className="inline-block bg-slate-800 rounded-2xl px-3 py-2">
-                            <p className="text-xs font-semibold text-slate-200">
-                              {comment.user.firstName} {comment.user.lastName}
-                            </p>
-                            <p className="text-sm text-slate-300">{comment.content}</p>
-                          </div>
-                          <p className="text-xs text-slate-500 mt-1 ml-3">
-                            {formatTime(comment.createdAt)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* View more comments link */}
-                {!expandedComments.has(post.id) && post.commentsCount > 0 && (
-                  <button
-                    onClick={() => toggleComments(post.id)}
-                    className="text-sm text-slate-500 hover:text-slate-300 hover:underline ml-2"
-                  >
-                    View {post.commentsCount} comment{post.commentsCount !== 1 ? 's' : ''}
-                  </button>
-                )}
               </div>
             </CardContent>
           </Card>
