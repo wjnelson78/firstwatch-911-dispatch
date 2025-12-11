@@ -55,8 +55,9 @@ export function StatsCards({ stats, loading }: StatsCardsProps) {
   const totalCount = stats?.total || 0;
   const uniqueAgencies = stats?.uniqueAgencies || 0;
 
-  // Get recent activity (events from the most recent hour in timeline)
-  const recentCount = stats?.timeline?.[0]?.count || 0;
+  // Get recent activity (sum of events from the last 6 hours of timeline)
+  // This gives a better picture than just the current hour which may be incomplete
+  const recentCount = stats?.timeline?.slice(0, 6).reduce((sum, h) => sum + (h.count || 0), 0) || 0;
 
   // Render loading skeleton state
   if (loading) {
@@ -125,7 +126,7 @@ export function StatsCards({ stats, loading }: StatsCardsProps) {
       description: 'Jurisdictions'
     },
     {
-      label: 'Last Hour',
+      label: 'Last 6 Hours',
       value: recentCount,
       icon: Clock,
       gradient: 'from-amber-500 to-yellow-600',
