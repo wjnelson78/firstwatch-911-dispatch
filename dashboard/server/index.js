@@ -23,10 +23,54 @@ import cors from 'cors';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import createAuthRouter, { authenticateToken, optionalAuth } from './auth.js';
+
+// ESM __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables from .env file
 dotenv.config();
+
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  // Accept images and videos only
+  if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image and video files are allowed'), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB max
+    files: 4 // Max 4 files per post
+  }
+});
 
 const { Pool } = pg;
 
@@ -83,6 +127,9 @@ app.use(cors({
 }));
 app.use(express.json());  // Parse JSON request bodies
 app.use(cookieParser());  // Parse cookies
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(uploadsDir));
 
 // Mount authentication routes
 app.use('/api/auth', createAuthRouter(pool));
@@ -714,6 +761,29 @@ app.get('/api/feed/posts', optionalAuth, async (req, res) => {
 });
 
 /**
+ * Upload media files for posts
+ * 
+ * @route POST /api/feed/upload
+ * @returns {Object} { urls: string[], types: string[] }
+ */
+app.post('/api/feed/upload', authenticateToken, upload.array('media', 4), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    const baseUrl = process.env.API_BASE_URL || `http://localhost:${PORT}`;
+    const urls = req.files.map(file => `${baseUrl}/uploads/${file.filename}`);
+    const types = req.files.map(file => file.mimetype.startsWith('video/') ? 'video' : 'image');
+
+    res.json({ urls, types });
+  } catch (error) {
+    console.error('Error uploading files:', error);
+    res.status(500).json({ error: 'Failed to upload files' });
+  }
+});
+
+/**
  * Create a new post
  * 
  * @route POST /api/feed/posts
@@ -729,11 +799,12 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
     const { content, mediaUrls, mediaTypes, location, latitude, longitude } = req.body;
     const userId = req.user.id;
 
-    if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      return res.status(400).json({ error: 'Post content is required' });
+    // Content is optional if there are media files
+    if ((!content || content.trim().length === 0) && (!mediaUrls || mediaUrls.length === 0)) {
+      return res.status(400).json({ error: 'Post must have content or media' });
     }
 
-    if (content.length > 5000) {
+    if (content && content.length > 5000) {
       return res.status(400).json({ error: 'Post content must be 5000 characters or less' });
     }
 
@@ -741,7 +812,7 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
       `INSERT INTO user_posts (user_id, content, media_urls, media_types, location, latitude, longitude)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [userId, content.trim(), mediaUrls || [], mediaTypes || [], location, latitude, longitude]
+      [userId, content?.trim() || '', mediaUrls || [], mediaTypes || [], location, latitude, longitude]
     );
 
     const post = result.rows[0];
@@ -760,13 +831,13 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
       dislikesCount: 0,
       commentsCount: 0,
       createdAt: post.created_at,
-      author: {
+      user: {
         id: userId,
-        username: user.username,
         firstName: user.first_name,
         lastName: user.last_name,
         initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()
-      }
+      },
+      userReaction: null
     });
   } catch (error) {
     console.error('Error creating post:', error);
@@ -775,10 +846,10 @@ app.post('/api/feed/posts', authenticateToken, async (req, res) => {
 });
 
 /**
- * React to a post (like/dislike)
+ * React to a post (like/dislike) or remove reaction
  * 
  * @route POST /api/feed/posts/:id/react
- * @body {string} reactionType - 'like' or 'dislike'
+ * @body {string|null} reactionType - 'like', 'dislike', or null to remove
  */
 app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
   try {
@@ -786,7 +857,8 @@ app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const { reactionType } = req.body;
 
-    if (!['like', 'dislike'].includes(reactionType)) {
+    // Allow null to remove reaction
+    if (reactionType !== null && !['like', 'dislike'].includes(reactionType)) {
       return res.status(400).json({ error: 'Invalid reaction type' });
     }
 
@@ -800,24 +872,39 @@ app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      if (existing.rows.length > 0) {
+      let newUserReaction = null;
+
+      if (reactionType === null) {
+        // Remove existing reaction if any
+        if (existing.rows.length > 0) {
+          const oldType = existing.rows[0].reaction_type;
+          await client.query('DELETE FROM post_reactions WHERE id = $1', [existing.rows[0].id]);
+          if (oldType === 'like') {
+            await client.query('UPDATE user_posts SET likes_count = GREATEST(0, likes_count - 1) WHERE id = $1', [postId]);
+          } else {
+            await client.query('UPDATE user_posts SET dislikes_count = GREATEST(0, dislikes_count - 1) WHERE id = $1', [postId]);
+          }
+        }
+      } else if (existing.rows.length > 0) {
         const oldType = existing.rows[0].reaction_type;
         if (oldType === reactionType) {
-          // Remove reaction
+          // Same reaction - toggle off
           await client.query('DELETE FROM post_reactions WHERE id = $1', [existing.rows[0].id]);
           if (reactionType === 'like') {
-            await client.query('UPDATE user_posts SET likes_count = likes_count - 1 WHERE id = $1', [postId]);
+            await client.query('UPDATE user_posts SET likes_count = GREATEST(0, likes_count - 1) WHERE id = $1', [postId]);
           } else {
-            await client.query('UPDATE user_posts SET dislikes_count = dislikes_count - 1 WHERE id = $1', [postId]);
+            await client.query('UPDATE user_posts SET dislikes_count = GREATEST(0, dislikes_count - 1) WHERE id = $1', [postId]);
           }
+          newUserReaction = null;
         } else {
-          // Change reaction
+          // Different reaction - change
           await client.query('UPDATE post_reactions SET reaction_type = $1 WHERE id = $2', [reactionType, existing.rows[0].id]);
           if (reactionType === 'like') {
-            await client.query('UPDATE user_posts SET likes_count = likes_count + 1, dislikes_count = dislikes_count - 1 WHERE id = $1', [postId]);
+            await client.query('UPDATE user_posts SET likes_count = likes_count + 1, dislikes_count = GREATEST(0, dislikes_count - 1) WHERE id = $1', [postId]);
           } else {
-            await client.query('UPDATE user_posts SET likes_count = likes_count - 1, dislikes_count = dislikes_count + 1 WHERE id = $1', [postId]);
+            await client.query('UPDATE user_posts SET likes_count = GREATEST(0, likes_count - 1), dislikes_count = dislikes_count + 1 WHERE id = $1', [postId]);
           }
+          newUserReaction = reactionType;
         }
       } else {
         // New reaction
@@ -830,6 +917,7 @@ app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
         } else {
           await client.query('UPDATE user_posts SET dislikes_count = dislikes_count + 1 WHERE id = $1', [postId]);
         }
+        newUserReaction = reactionType;
       }
 
       await client.query('COMMIT');
@@ -838,7 +926,8 @@ app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
       const updated = await pool.query('SELECT likes_count, dislikes_count FROM user_posts WHERE id = $1', [postId]);
       res.json({
         likesCount: updated.rows[0].likes_count,
-        dislikesCount: updated.rows[0].dislikes_count
+        dislikesCount: updated.rows[0].dislikes_count,
+        userReaction: newUserReaction
       });
     } catch (e) {
       await client.query('ROLLBACK');
@@ -874,16 +963,15 @@ app.get('/api/feed/posts/:id/comments', async (req, res) => {
       id: row.id,
       content: row.content,
       createdAt: row.created_at,
-      author: {
+      user: {
         id: row.user_id,
-        username: row.username,
         firstName: row.first_name,
         lastName: row.last_name,
         initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
       }
     }));
 
-    res.json(comments);
+    res.json({ comments });
   } catch (error) {
     console.error('Error fetching comments:', error);
     res.status(500).json({ error: 'Failed to fetch comments' });
@@ -930,9 +1018,8 @@ app.post('/api/feed/posts/:id/comments', authenticateToken, async (req, res) => 
         id: result.rows[0].id,
         content: result.rows[0].content,
         createdAt: result.rows[0].created_at,
-        author: {
+        user: {
           id: userId,
-          username: user.username,
           firstName: user.first_name,
           lastName: user.last_name,
           initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()

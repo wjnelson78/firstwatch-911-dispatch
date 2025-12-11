@@ -160,7 +160,7 @@ export function UserFeed() {
     return () => clearInterval(interval);
   }, [fetchPosts]);
 
-  // Create new post
+  // Create new post with optional file uploads
   const handleCreatePost = async () => {
     if (!newPostContent.trim() && selectedFiles.length === 0) return;
     
@@ -169,7 +169,32 @@ export function UserFeed() {
     
     setIsPosting(true);
     try {
-      // For now, just send text content. File upload would need a separate endpoint
+      let mediaUrls: string[] = [];
+      let mediaTypes: string[] = [];
+
+      // Upload files first if any
+      if (selectedFiles.length > 0) {
+        const formData = new FormData();
+        selectedFiles.forEach(file => {
+          formData.append('media', file);
+        });
+
+        const uploadResponse = await fetch(`${API_BASE}/feed/upload`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: formData
+        });
+
+        if (uploadResponse.ok) {
+          const uploadData = await uploadResponse.json();
+          mediaUrls = uploadData.urls;
+          mediaTypes = uploadData.types;
+        }
+      }
+
+      // Create the post
       const response = await fetch(`${API_BASE}/feed/posts`, {
         method: 'POST',
         headers: {
@@ -178,8 +203,8 @@ export function UserFeed() {
         },
         body: JSON.stringify({
           content: newPostContent.trim(),
-          mediaUrls: [],
-          mediaTypes: []
+          mediaUrls,
+          mediaTypes
         })
       });
       
@@ -189,6 +214,8 @@ export function UserFeed() {
       setPosts(prev => [newPost, ...prev]);
       setNewPostContent('');
       setSelectedFiles([]);
+      // Clean up preview URLs
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
       setPreviewUrls([]);
     } catch (err) {
       console.error('Error creating post:', err);
@@ -198,10 +225,40 @@ export function UserFeed() {
     }
   };
 
-  // Handle reaction (like/dislike)
+  // Handle reaction (like/dislike) - toggle off if clicking same reaction
   const handleReaction = async (postId: number, reactionType: 'like' | 'dislike') => {
     const accessToken = getAccessToken();
-    if (!accessToken) return;
+    if (!accessToken) {
+      // Prompt user to sign in
+      document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
+      return;
+    }
+    
+    // Optimistic update for instant feedback
+    const post = posts.find(p => p.id === postId);
+    if (!post) return;
+    
+    // If clicking same reaction, toggle it off
+    const newReaction = post.userReaction === reactionType ? null : reactionType;
+    
+    // Calculate new counts optimistically
+    let newLikesCount = post.likesCount;
+    let newDislikesCount = post.dislikesCount;
+    
+    if (post.userReaction === 'like') newLikesCount--;
+    if (post.userReaction === 'dislike') newDislikesCount--;
+    if (newReaction === 'like') newLikesCount++;
+    if (newReaction === 'dislike') newDislikesCount++;
+    
+    // Update UI immediately
+    setPosts(prev => prev.map(p => 
+      p.id === postId 
+        ? { ...p, likesCount: newLikesCount, dislikesCount: newDislikesCount, userReaction: newReaction }
+        : p
+    ));
+    
+    // For sample posts (negative IDs), don't make API call
+    if (postId < 0) return;
     
     try {
       const response = await fetch(`${API_BASE}/feed/posts/${postId}/react`, {
@@ -210,19 +267,23 @@ export function UserFeed() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`
         },
-        body: JSON.stringify({ reactionType })
+        body: JSON.stringify({ reactionType: newReaction })
       });
       
       if (!response.ok) throw new Error('Failed to react');
       
       const data = await response.json();
-      setPosts(prev => prev.map(post => 
-        post.id === postId 
-          ? { ...post, likesCount: data.likesCount, dislikesCount: data.dislikesCount, userReaction: data.userReaction }
-          : post
+      setPosts(prev => prev.map(p => 
+        p.id === postId 
+          ? { ...p, likesCount: data.likesCount, dislikesCount: data.dislikesCount, userReaction: data.userReaction }
+          : p
       ));
     } catch (err) {
       console.error('Error reacting to post:', err);
+      // Revert on error
+      setPosts(prev => prev.map(p => 
+        p.id === postId ? post : p
+      ));
     }
   };
 
@@ -367,17 +428,32 @@ export function UserFeed() {
                   <div className="flex gap-2 flex-wrap">
                     {previewUrls.map((url, index) => (
                       <div key={index} className="relative group">
-                        <img 
-                          src={url} 
-                          alt="Preview" 
-                          className="h-20 w-20 object-cover rounded-lg border border-slate-700"
-                        />
+                        {selectedFiles[index]?.type.startsWith('video/') ? (
+                          <video 
+                            src={url} 
+                            className="h-20 w-20 object-cover rounded-lg border border-slate-700"
+                          />
+                        ) : (
+                          <img 
+                            src={url} 
+                            alt="Preview" 
+                            className="h-20 w-20 object-cover rounded-lg border border-slate-700"
+                          />
+                        )}
                         <button
                           onClick={() => removeFile(index)}
                           className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove file"
                         >
                           <X className="h-3 w-3" />
                         </button>
+                        {selectedFiles[index]?.type.startsWith('video/') && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="bg-black/50 rounded-full p-1">
+                              <Camera className="h-4 w-4 text-white" />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -392,6 +468,7 @@ export function UserFeed() {
                       accept="image/*,video/*"
                       multiple
                       className="hidden"
+                      aria-label="Upload photo or video"
                     />
                     <Button
                       variant="ghost"
@@ -486,14 +563,25 @@ export function UserFeed() {
                   "grid gap-2 mb-3",
                   post.mediaUrls.length === 1 ? "grid-cols-1" : "grid-cols-2"
                 )}>
-                  {post.mediaUrls.map((url, index) => (
-                    <img
-                      key={index}
-                      src={url}
-                      alt=""
-                      className="rounded-lg w-full object-cover max-h-80"
-                    />
-                  ))}
+                  {post.mediaUrls.map((url, index) => {
+                    const isVideo = post.mediaTypes?.[index] === 'video' || url.match(/\.(mp4|mov|webm)$/i);
+                    return isVideo ? (
+                      <video
+                        key={index}
+                        src={url}
+                        controls
+                        className="rounded-lg w-full max-h-80 bg-black"
+                      />
+                    ) : (
+                      <img
+                        key={index}
+                        src={url}
+                        alt=""
+                        className="rounded-lg w-full object-cover max-h-80 cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() => window.open(url, '_blank')}
+                      />
+                    );
+                  })}
                 </div>
               )}
 
@@ -505,29 +593,59 @@ export function UserFeed() {
                 </div>
               )}
 
-              {/* Post Stats */}
-              <div className="flex items-center gap-4 text-sm text-slate-500 mb-3">
-                {post.likesCount > 0 && <span>{post.likesCount} likes</span>}
-                {post.dislikesCount > 0 && <span>{post.dislikesCount} dislikes</span>}
-                {post.commentsCount > 0 && <span>{post.commentsCount} comments</span>}
+              {/* Post Stats - Facebook style */}
+              <div className="flex items-center justify-between text-sm text-slate-500 mb-3">
+                <div className="flex items-center gap-2">
+                  {(post.likesCount > 0 || post.dislikesCount > 0) && (
+                    <div className="flex items-center gap-1">
+                      {post.likesCount > 0 && (
+                        <span className="flex items-center gap-1">
+                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow-500">
+                            <ThumbsUp className="h-3 w-3 text-white" />
+                          </span>
+                          {post.likesCount}
+                        </span>
+                      )}
+                      {post.dislikesCount > 0 && (
+                        <span className="flex items-center gap-1 ml-1">
+                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500">
+                            <ThumbsDown className="h-3 w-3 text-white" />
+                          </span>
+                          {post.dislikesCount}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {post.commentsCount > 0 && (
+                  <button 
+                    onClick={() => toggleComments(post.id)}
+                    className="hover:underline cursor-pointer"
+                  >
+                    {post.commentsCount} comment{post.commentsCount !== 1 ? 's' : ''}
+                  </button>
+                )}
               </div>
 
               <Separator className="bg-slate-700 mb-3" />
 
-              {/* Post Actions */}
-              <div className="flex items-center gap-2">
+              {/* Post Actions - Facebook style */}
+              <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => handleReaction(post.id, 'like')}
                   className={cn(
-                    "flex-1 gap-2",
+                    "flex-1 gap-2 transition-all duration-200",
                     post.userReaction === 'like' 
-                      ? "text-blue-400 bg-blue-500/10" 
+                      ? "text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20" 
                       : "text-slate-400 hover:text-white hover:bg-slate-700"
                   )}
                 >
-                  <ThumbsUp className="h-4 w-4" />
+                  <ThumbsUp className={cn(
+                    "h-4 w-4 transition-transform",
+                    post.userReaction === 'like' && "fill-current scale-110"
+                  )} />
                   Like
                 </Button>
                 <Button
@@ -535,13 +653,16 @@ export function UserFeed() {
                   size="sm"
                   onClick={() => handleReaction(post.id, 'dislike')}
                   className={cn(
-                    "flex-1 gap-2",
+                    "flex-1 gap-2 transition-all duration-200",
                     post.userReaction === 'dislike' 
-                      ? "text-red-400 bg-red-500/10" 
+                      ? "text-red-400 bg-red-500/10 hover:bg-red-500/20" 
                       : "text-slate-400 hover:text-white hover:bg-slate-700"
                   )}
                 >
-                  <ThumbsDown className="h-4 w-4" />
+                  <ThumbsDown className={cn(
+                    "h-4 w-4 transition-transform",
+                    post.userReaction === 'dislike' && "fill-current scale-110"
+                  )} />
                   Dislike
                 </Button>
                 <Button
@@ -560,59 +681,95 @@ export function UserFeed() {
                 </Button>
               </div>
 
-              {/* Comments Section */}
-              {expandedComments.has(post.id) && (
-                <div className="mt-4 pt-4 border-t border-slate-700 space-y-3">
-                  {postComments[post.id]?.map(comment => (
-                    <div key={comment.id} className="flex gap-2">
-                      <div className={cn(
-                        "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
-                        getAvatarColor(comment.user.id)
-                      )}>
-                        {comment.user.initials}
-                      </div>
-                      <div className="flex-1 bg-slate-800/50 rounded-lg p-2">
-                        <p className="text-xs font-medium text-slate-300">
-                          {comment.user.firstName} {comment.user.lastName}
-                          <span className="font-normal text-slate-500 ml-2">
-                            {formatTime(comment.createdAt)}
-                          </span>
-                        </p>
-                        <p className="text-sm text-slate-200">{comment.content}</p>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Add Comment */}
-                  {user && (
-                    <div className="flex gap-2">
+              {/* Comments Section - Facebook style, always show input */}
+              <div className="mt-3 space-y-3">
+                {/* Comment Input - Always visible like Facebook */}
+                <div className="flex gap-2">
+                  {user ? (
+                    <>
                       <div className={cn(
                         "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
                         getAvatarColor(user.id)
                       )}>
                         {user.firstName?.[0]}{user.lastName?.[0]}
                       </div>
-                      <div className="flex-1 flex gap-2">
+                      <div className="flex-1 relative">
                         <Input
                           value={newComments[post.id] || ''}
                           onChange={(e) => setNewComments(prev => ({ ...prev, [post.id]: e.target.value }))}
                           placeholder="Write a comment..."
-                          className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
-                          onKeyDown={(e) => e.key === 'Enter' && handleAddComment(post.id)}
+                          className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 rounded-full pr-10"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleAddComment(post.id);
+                            }
+                          }}
+                          onFocus={() => {
+                            if (!expandedComments.has(post.id) && post.commentsCount > 0) {
+                              toggleComments(post.id);
+                            }
+                          }}
                         />
-                        <Button
-                          size="icon"
-                          onClick={() => handleAddComment(post.id)}
-                          disabled={!newComments[post.id]?.trim()}
-                          className="bg-purple-500 hover:bg-purple-600"
-                        >
-                          <Send className="h-4 w-4" />
-                        </Button>
+                        {newComments[post.id]?.trim() && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleAddComment(post.id)}
+                            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-purple-400 hover:text-purple-300 hover:bg-transparent"
+                          >
+                            <Send className="h-4 w-4" />
+                          </Button>
+                        )}
                       </div>
+                    </>
+                  ) : (
+                    <div 
+                      className="flex-1 bg-slate-800/50 border border-slate-700 rounded-full px-4 py-2 text-slate-500 cursor-pointer hover:bg-slate-800"
+                      onClick={() => document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click()}
+                    >
+                      Sign in to comment...
                     </div>
                   )}
                 </div>
-              )}
+
+                {/* Existing Comments */}
+                {expandedComments.has(post.id) && postComments[post.id]?.length > 0 && (
+                  <div className="space-y-2 pl-2">
+                    {postComments[post.id].map(comment => (
+                      <div key={comment.id} className="flex gap-2">
+                        <div className={cn(
+                          "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
+                          getAvatarColor(comment.user.id)
+                        )}>
+                          {comment.user.initials}
+                        </div>
+                        <div className="flex-1">
+                          <div className="inline-block bg-slate-800 rounded-2xl px-3 py-2">
+                            <p className="text-xs font-semibold text-slate-200">
+                              {comment.user.firstName} {comment.user.lastName}
+                            </p>
+                            <p className="text-sm text-slate-300">{comment.content}</p>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1 ml-3">
+                            {formatTime(comment.createdAt)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* View more comments link */}
+                {!expandedComments.has(post.id) && post.commentsCount > 0 && (
+                  <button
+                    onClick={() => toggleComments(post.id)}
+                    className="text-sm text-slate-500 hover:text-slate-300 hover:underline ml-2"
+                  >
+                    View {post.commentsCount} comment{post.commentsCount !== 1 ? 's' : ''}
+                  </button>
+                )}
+              </div>
             </CardContent>
           </Card>
         ))
