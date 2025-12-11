@@ -176,16 +176,21 @@ app.get('/api/dispatches', async (req, res) => {
       paramIndex++;
     }
 
-    // Get total count for pagination
+    // Get total count for pagination (deduplicated)
     const countResult = await pool.query(
-      `SELECT COUNT(*) as total FROM events ${whereClause}`,
+      `SELECT COUNT(*) as total FROM (
+        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction) id
+        FROM events ${whereClause}
+      ) as unique_events`,
       params
     );
     const total = parseInt(countResult.rows[0].total);
 
-    // Get paginated results
+    // Get paginated results (deduplicated by call attributes)
+    // Uses DISTINCT ON to get unique events based on call_type, address, call_created, jurisdiction
+    // This handles cases where the same incident gets multiple event_ids from the source
     const query = `
-      SELECT 
+      SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
         id,
         event_id,
         call_number,
@@ -202,12 +207,18 @@ app.get('/api/dispatches', async (req, res) => {
         times_seen
       FROM events
       ${whereClause}
+      ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
+    `;
+
+    // Wrap in subquery to apply custom sorting and pagination
+    const paginatedQuery = `
+      SELECT * FROM (${query}) as deduplicated
       ORDER BY ${safeSortBy} ${safeSortOrder}
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
     params.push(parseInt(limit), parseInt(offset));
 
-    const result = await pool.query(query, params);
+    const result = await pool.query(paginatedQuery, params);
     
     res.json({
       events: result.rows,
@@ -235,63 +246,80 @@ app.get('/api/stats', async (req, res) => {
       params.push(startDate, endDate);
     }
 
-    // Total events
+    // Create deduplicated CTE for accurate stats
+    const deduplicatedCTE = `
+      WITH deduplicated AS (
+        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
+          id, call_type, address, call_created, jurisdiction, agency_type
+        FROM events
+        ${dateFilter}
+        ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
+      )
+    `;
+
+    // Total events (deduplicated)
     const totalResult = await pool.query(
-      `SELECT COUNT(*) as total FROM events ${dateFilter}`,
+      `${deduplicatedCTE} SELECT COUNT(*) as total FROM deduplicated`,
       params
     );
 
-    // Events by type (agency_type)
+    // Events by type (agency_type) - deduplicated
     const byTypeResult = await pool.query(
-      `SELECT 
+      `${deduplicatedCTE}
+       SELECT 
         COALESCE(LOWER(agency_type), 'unknown') as event_type, 
         COUNT(*) as count 
-       FROM events 
-       ${dateFilter}
+       FROM deduplicated 
        GROUP BY LOWER(agency_type)`,
       params
     );
 
-    // Events by jurisdiction (top 10)
+    // Events by jurisdiction (top 10) - deduplicated
     const byJurisdictionResult = await pool.query(
-      `SELECT 
+      `${deduplicatedCTE}
+       SELECT 
         COALESCE(jurisdiction, 'Unknown') as jurisdiction, 
         COUNT(*) as count 
-       FROM events 
-       ${dateFilter}
+       FROM deduplicated 
        GROUP BY jurisdiction
        ORDER BY count DESC
        LIMIT 10`,
       params
     );
 
-    // Unique jurisdictions
+    // Unique jurisdictions - deduplicated
     const jurisdictionsResult = await pool.query(
-      `SELECT COUNT(DISTINCT jurisdiction) as count FROM events ${dateFilter}`,
+      `${deduplicatedCTE} SELECT COUNT(DISTINCT jurisdiction) as count FROM deduplicated`,
       params
     );
 
-    // Events by hour (for timeline)
+    // Events by hour (for timeline) - deduplicated
     const byHourResult = await pool.query(
-      `SELECT 
+      `${deduplicatedCTE}
+       SELECT 
         DATE_TRUNC('hour', call_created) as hour,
         COUNT(*) as count
-       FROM events 
-       ${dateFilter}
+       FROM deduplicated 
        GROUP BY DATE_TRUNC('hour', call_created)
        ORDER BY hour DESC
        LIMIT 48`,
       params
     );
 
-    // Recent activity (last 24 hours by hour)
+    // Recent activity (last 24 hours by hour) - deduplicated
     const recentResult = await pool.query(
-      `SELECT 
+      `WITH recent_deduplicated AS (
+        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
+          call_created, agency_type
+        FROM events 
+        WHERE call_created >= NOW() - INTERVAL '24 hours'
+        ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
+      )
+       SELECT 
         DATE_TRUNC('hour', call_created) as hour,
         COALESCE(LOWER(agency_type), 'unknown') as event_type,
         COUNT(*) as count
-       FROM events 
-       WHERE call_created >= NOW() - INTERVAL '24 hours'
+       FROM recent_deduplicated 
        GROUP BY DATE_TRUNC('hour', call_created), LOWER(agency_type)
        ORDER BY hour`
     );
@@ -363,29 +391,42 @@ app.get('/api/dispatches/latest', async (req, res) => {
   }
 });
 
-// Get unique values for filters with counts
+// Get unique values for filters with counts (deduplicated)
 app.get('/api/filters', async (req, res) => {
   try {
+    // Use deduplicated counts for accurate filter values
+    const deduplicatedCTE = `
+      WITH deduplicated AS (
+        SELECT DISTINCT ON (call_type, address, call_created, jurisdiction)
+          call_type, address, call_created, jurisdiction, agency_type
+        FROM events
+        ORDER BY call_type, address, call_created, jurisdiction, first_seen DESC
+      )
+    `;
+
     const agencyTypesResult = await pool.query(
-      `SELECT COALESCE(agency_type, 'Unknown') as agency_type, COUNT(*) as count
-       FROM events 
+      `${deduplicatedCTE}
+       SELECT COALESCE(agency_type, 'Unknown') as agency_type, COUNT(*) as count
+       FROM deduplicated 
        GROUP BY agency_type
        ORDER BY count DESC`
     );
     
     const jurisdictionsResult = await pool.query(
-      `SELECT jurisdiction, COUNT(*) as count
-       FROM events 
+      `${deduplicatedCTE}
+       SELECT jurisdiction, COUNT(*) as count
+       FROM deduplicated 
        WHERE jurisdiction IS NOT NULL
        GROUP BY jurisdiction
        ORDER BY count DESC`
     );
 
     const callTypesResult = await pool.query(
-      `SELECT COALESCE(call_type, 'Unknown') as call_type, 
+      `${deduplicatedCTE}
+       SELECT COALESCE(call_type, 'Unknown') as call_type, 
               COALESCE(agency_type, 'Unknown') as agency_type,
               COUNT(*) as count 
-       FROM events 
+       FROM deduplicated 
        GROUP BY call_type, agency_type
        ORDER BY count DESC
        LIMIT 200`
