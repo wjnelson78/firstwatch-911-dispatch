@@ -20,7 +20,7 @@
  * @license MIT
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -177,6 +177,15 @@ export function Dashboard() {
   
   /** Sort direction */
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  
+  /** Track IDs of newly added events for animation */
+  const [newEventIds, setNewEventIds] = useState<Set<number>>(new Set());
+  
+  /** Ref to track previous event IDs for comparison */
+  const previousEventIdsRef = useRef<Set<number>>(new Set());
+  
+  /** Track if this is the initial load (show skeleton) vs refresh (smooth update) */
+  const isInitialLoadRef = useRef(true);
 
   // ============================================================================
   // Data Fetching
@@ -188,8 +197,11 @@ export function Dashboard() {
    * Retrieves dispatch events, statistics, and filter options in parallel.
    * Updates state and handles error conditions.
    */
-  const fetchData = useCallback(async (page = currentPage) => {
-    setLoading(true);
+  const fetchData = useCallback(async (page = currentPage, isAutoRefresh = false) => {
+    // Only show loading skeleton on initial load, not on auto-refresh
+    if (!isAutoRefresh || isInitialLoadRef.current) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const offset = (page - 1) * ITEMS_PER_PAGE;
@@ -210,7 +222,30 @@ export function Dashboard() {
         fetchFilters()
       ]);
       
-      setEvents(dispatchResponse.events);
+      // Identify new events for animation (only on page 1 with default sort)
+      const newEvents = dispatchResponse.events;
+      const newEventIdSet = new Set(newEvents.map(e => e.id));
+      
+      if (isAutoRefresh && page === 1 && sortBy === 'call_created' && sortOrder === 'desc') {
+        // Find events that are new (not in previous set)
+        const newIds = new Set<number>();
+        newEvents.forEach(event => {
+          if (!previousEventIdsRef.current.has(event.id)) {
+            newIds.add(event.id);
+          }
+        });
+        
+        if (newIds.size > 0) {
+          setNewEventIds(newIds);
+          // Clear the "new" status after animation completes
+          setTimeout(() => setNewEventIds(new Set()), 1000);
+        }
+      }
+      
+      // Update the previous IDs ref for next comparison
+      previousEventIdsRef.current = newEventIdSet;
+      
+      setEvents(newEvents);
       setTotalEvents(dispatchResponse.total);
       setTotalPages(dispatchResponse.pages);
       setStats(statsData);
@@ -228,6 +263,7 @@ export function Dashboard() {
       }
       
       setLastUpdate(new Date());
+      isInitialLoadRef.current = false;
     } catch (err) {
       console.error('Failed to fetch data:', err);
       setError('Failed to connect to the API server. Make sure the backend is running.');
@@ -248,9 +284,9 @@ export function Dashboard() {
   /** Auto-refresh interval when live mode is enabled */
   useEffect(() => {
     if (!isLive) return;
-    const interval = setInterval(fetchData, 30000); // 30 second refresh
+    const interval = setInterval(() => fetchData(currentPage, true), 30000); // 30 second refresh
     return () => clearInterval(interval);
-  }, [isLive, fetchData]);
+  }, [isLive, fetchData, currentPage]);
 
   /** Apply dark mode class to document */
   useEffect(() => {
@@ -803,6 +839,7 @@ export function Dashboard() {
                       <EventCard 
                         key={event.id} 
                         event={event} 
+                        isNew={newEventIds.has(event.id)}
                         onClick={() => setSelectedEvent(event)}
                       />
                     ))
@@ -919,6 +956,7 @@ export function Dashboard() {
                           key={event.id} 
                           event={event} 
                           compact
+                          isNew={newEventIds.has(event.id)}
                           onClick={() => setSelectedEvent(event)}
                         />
                       ))
@@ -952,6 +990,7 @@ export function Dashboard() {
                           key={event.id} 
                           event={event} 
                           compact
+                          isNew={newEventIds.has(event.id)}
                           onClick={() => setSelectedEvent(event)}
                         />
                       ))
@@ -988,10 +1027,11 @@ export function Dashboard() {
 interface EventCardProps {
   event: DispatchEvent;
   compact?: boolean;
+  isNew?: boolean;
   onClick: () => void;
 }
 
-function EventCard({ event, compact, onClick }: EventCardProps) {
+function EventCard({ event, compact, isNew, onClick }: EventCardProps) {
   const isPolice = event.agency_type === 'Police';
   const timeAgo = event.call_created 
     ? formatDistanceToNow(new Date(event.call_created), { addSuffix: true })
@@ -1006,10 +1046,11 @@ function EventCard({ event, compact, onClick }: EventCardProps) {
     <div 
       onClick={onClick}
       className={cn(
-        "group p-4 rounded-xl transition-all cursor-pointer",
+        "group p-4 rounded-xl transition-all duration-300 cursor-pointer",
         "bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 hover:border-slate-600",
         "hover:shadow-lg",
-        isPolice ? "hover:shadow-blue-500/10" : "hover:shadow-red-500/10"
+        isPolice ? "hover:shadow-blue-500/10" : "hover:shadow-red-500/10",
+        isNew && "animate-slide-in-highlight"
       )}
     >
       <div className="flex items-start gap-3">

@@ -85,3 +85,32 @@
 .animation-delay-1s {
   animation-delay: 1s;
 }
+
+/* Smooth slide-in animation for new events */
+@keyframes slide-in-highlight {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px);
+    background-color: rgba(168, 85, 247, 0.3);
+    border-color: rgba(168, 85, 247, 0.5);
+    box-shadow: 0 0 20px rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(0);
+    background-color: rgba(168, 85, 247, 0.2);
+    border-color: rgba(168, 85, 247, 0.4);
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    background-color: rgba(30, 41, 59, 0.5);
+    border-color: rgba(51, 65, 85, 0.5);
+    box-shadow: none;
+  }
+}
+
+.animate-slide-in-highlight {
+  animation: slide-in-highlight 0.8s ease-out forwards;
+}
