@@ -111,7 +111,7 @@ export function EventDetailModal({ event, open, onClose }: EventDetailModalProps
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-0">
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto p-0">
         {/* Header with gradient */}
         <div className={`bg-gradient-to-r ${getGradient()} p-6 text-white rounded-t-lg`}>
           <DialogHeader>
@@ -291,7 +291,7 @@ function DetailRow({ icon, label, value }: { icon: React.ReactNode; label: strin
       <div className="text-muted-foreground">{icon}</div>
       <div className="flex-1 min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="font-medium truncate">{value || 'N/A'}</p>
+        <p className="font-medium break-all">{value || 'N/A'}</p>
       </div>
     </div>
   );

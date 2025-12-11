@@ -43,6 +43,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { StatsCards } from './StatsCards';
 import { Charts } from './Charts';
 import { EventDetailModal } from './EventDetailModal';
+import { ActiveUsers } from './ActiveUsers';
+import { UserMenu } from '@/components/auth/UserMenu';
 import { fetchDispatches, fetchStats, fetchFilters } from '@/services/api';
 import { 
   RefreshCw, 
@@ -65,7 +67,13 @@ import {
   List,
   Zap,
   TrendingUp,
-  Building2
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import type { DispatchEvent, Stats, HourlyStats, FilterOptions } from '@/types/dispatch';
 import { formatDistanceToNow } from 'date-fns';
@@ -76,6 +84,12 @@ type ViewMode = 'unified' | 'split';
 
 /** Agency filter type for Police/Fire filtering */
 type AgencyFilter = 'all' | 'Police' | 'Fire';
+
+/** Sort field options */
+type SortField = 'call_created' | 'address' | 'call_type' | 'jurisdiction';
+
+/** Sort direction */
+type SortOrder = 'asc' | 'desc';
 
 /**
  * Dashboard Component
@@ -143,6 +157,28 @@ export function Dashboard() {
   const [callTypePopoverOpen, setCallTypePopoverOpen] = useState(false);
 
   // ============================================================================
+  // Pagination & Sorting State
+  // ============================================================================
+  
+  /** Items per page */
+  const ITEMS_PER_PAGE = 100;
+  
+  /** Current page number (1-indexed) */
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  /** Total number of events in database */
+  const [totalEvents, setTotalEvents] = useState(0);
+  
+  /** Total pages available */
+  const [totalPages, setTotalPages] = useState(1);
+  
+  /** Sort field */
+  const [sortBy, setSortBy] = useState<SortField>('call_created');
+  
+  /** Sort direction */
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+
+  // ============================================================================
   // Data Fetching
   // ============================================================================
 
@@ -152,18 +188,31 @@ export function Dashboard() {
    * Retrieves dispatch events, statistics, and filter options in parallel.
    * Updates state and handles error conditions.
    */
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (page = currentPage) => {
     setLoading(true);
     setError(null);
     try {
+      const offset = (page - 1) * ITEMS_PER_PAGE;
+      
       // Fetch all data in parallel for better performance
-      const [eventsData, statsData, filtersData] = await Promise.all([
-        fetchDispatches({ limit: 500 }),
+      const [dispatchResponse, statsData, filtersData] = await Promise.all([
+        fetchDispatches({ 
+          limit: ITEMS_PER_PAGE, 
+          offset,
+          eventType: agencyFilter !== 'all' ? agencyFilter : undefined,
+          jurisdiction: jurisdictionFilter !== 'all' ? jurisdictionFilter : undefined,
+          callType: callTypeFilter !== 'all' ? callTypeFilter : undefined,
+          search: searchQuery || undefined,
+          sortBy,
+          sortOrder
+        }),
         fetchStats(),
         fetchFilters()
       ]);
       
-      setEvents(eventsData);
+      setEvents(dispatchResponse.events);
+      setTotalEvents(dispatchResponse.total);
+      setTotalPages(dispatchResponse.pages);
       setStats(statsData);
       setFilters(filtersData);
       
@@ -185,7 +234,7 @@ export function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentPage, agencyFilter, jurisdictionFilter, callTypeFilter, searchQuery, sortBy, sortOrder]);
 
   // ============================================================================
   // Effects
@@ -213,30 +262,16 @@ export function Dashboard() {
   // ============================================================================
 
   /**
-   * Filtered events based on all active filters
-   * 
-   * Applies agency, jurisdiction, call type, and search filters to the
-   * raw events array. Uses memoization for performance.
+   * Since we're using server-side filtering/pagination now,
+   * events from API are already filtered. We just use them directly.
    */
-  const filteredEvents = useMemo(() => {
-    return events.filter(event => {
-      const matchesAgency = agencyFilter === 'all' || event.agency_type === agencyFilter;
-      const matchesJurisdiction = jurisdictionFilter === 'all' || event.jurisdiction === jurisdictionFilter;
-      const matchesCallType = callTypeFilter === 'all' || event.call_type === callTypeFilter;
-      const matchesSearch = !searchQuery || 
-        (event.address?.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (event.call_type?.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (event.jurisdiction?.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (event.units?.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchesAgency && matchesJurisdiction && matchesCallType && matchesSearch;
-    });
-  }, [events, agencyFilter, jurisdictionFilter, callTypeFilter, searchQuery]);
+  const filteredEvents = events;
 
-  /** Police events subset */
-  const policeEvents = filteredEvents.filter(e => e.agency_type === 'Police');
+  /** Police events subset (for split view) */
+  const policeEvents = events.filter(e => e.agency_type === 'Police');
   
-  /** Fire events subset */
-  const fireEvents = filteredEvents.filter(e => e.agency_type === 'Fire');
+  /** Fire events subset (for split view) */
+  const fireEvents = events.filter(e => e.agency_type === 'Fire');
 
   /** Count of active filters for badge display */
   const activeFiltersCount = [
@@ -250,13 +285,64 @@ export function Dashboard() {
   // Event Handlers
   // ============================================================================
 
-  /** Clears all active filters and search */
+  /** Clears all active filters and search, resets to page 1 */
   const clearAllFilters = () => {
     setAgencyFilter('all');
     setJurisdictionFilter('all');
     setCallTypeFilter('all');
     setSearchQuery('');
+    setCurrentPage(1);
   };
+
+  /** Handle filter changes - reset to page 1 */
+  const handleAgencyFilterChange = (value: AgencyFilter) => {
+    setAgencyFilter(value);
+    setCurrentPage(1);
+  };
+
+  const handleJurisdictionFilterChange = (value: string) => {
+    setJurisdictionFilter(value);
+    setCurrentPage(1);
+    setJurisdictionPopoverOpen(false);
+  };
+
+  const handleCallTypeFilterChange = (value: string) => {
+    setCallTypeFilter(value);
+    setCurrentPage(1);
+    setCallTypePopoverOpen(false);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+  };
+
+  /** Handle sorting */
+  const handleSort = (field: SortField) => {
+    if (sortBy === field) {
+      // Toggle direction if same field
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New field, default to descending
+      setSortBy(field);
+      setSortOrder('desc');
+    }
+    setCurrentPage(1);
+  };
+
+  /** Pagination handlers */
+  const goToPage = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+      // Scroll to top of event list
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const goToFirstPage = () => goToPage(1);
+  const goToLastPage = () => goToPage(totalPages);
+  const goToPreviousPage = () => goToPage(currentPage - 1);
+  const goToNextPage = () => goToPage(currentPage + 1);
 
   /**
    * Call types filtered by selected agency
@@ -332,7 +418,7 @@ export function Dashboard() {
             <Button 
               variant="outline" 
               size="icon"
-              onClick={fetchData}
+              onClick={() => fetchData()}
               disabled={loading}
               className="border-slate-700 bg-slate-800/50 hover:bg-slate-700"
             >
@@ -348,6 +434,23 @@ export function Dashboard() {
             >
               {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
+
+            {/* Active users indicator */}
+            <ActiveUsers />
+
+            {/* User menu / Auth */}
+            <UserMenu 
+              jurisdictions={filters?.jurisdictions.map(j => j.name) || []}
+              callTypes={filters?.callTypes.map(c => c.name) || []}
+              onApplyFilter={(filter) => {
+                if (filter.jurisdictions && filter.jurisdictions.length > 0) {
+                  setJurisdictionFilter(filter.jurisdictions[0]);
+                }
+                if (filter.callTypes && filter.callTypes.length > 0) {
+                  setCallTypeFilter(filter.callTypes[0]);
+                }
+              }}
+            />
           </div>
         </div>
       </header>
@@ -378,7 +481,7 @@ export function Dashboard() {
               <Input
                 placeholder="Search calls..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="pl-10 bg-slate-800/50 border-slate-700 focus:border-purple-500/50 text-white placeholder:text-slate-500"
               />
             </div>
@@ -386,7 +489,7 @@ export function Dashboard() {
             {/* Agency Type Filter */}
             <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-slate-800/50">
               <button
-                onClick={() => setAgencyFilter('all')}
+                onClick={() => handleAgencyFilterChange('all')}
                 className={cn(
                   "px-4 py-2 text-sm font-medium transition-colors",
                   agencyFilter === 'all' 
@@ -397,7 +500,7 @@ export function Dashboard() {
                 All
               </button>
               <button
-                onClick={() => setAgencyFilter('Police')}
+                onClick={() => handleAgencyFilterChange('Police')}
                 className={cn(
                   "px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5",
                   agencyFilter === 'Police' 
@@ -409,7 +512,7 @@ export function Dashboard() {
                 Police
               </button>
               <button
-                onClick={() => setAgencyFilter('Fire')}
+                onClick={() => handleAgencyFilterChange('Fire')}
                 className={cn(
                   "px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5",
                   agencyFilter === 'Fire' 
@@ -447,10 +550,7 @@ export function Dashboard() {
                     <CommandEmpty>No agency found.</CommandEmpty>
                     <CommandGroup>
                       <CommandItem
-                        onSelect={() => {
-                          setJurisdictionFilter('all');
-                          setJurisdictionPopoverOpen(false);
-                        }}
+                        onSelect={() => handleJurisdictionFilterChange('all')}
                         className="text-slate-300 hover:bg-slate-800"
                       >
                         <Check className={cn("mr-2 h-4 w-4", jurisdictionFilter === 'all' ? "opacity-100" : "opacity-0")} />
@@ -459,10 +559,7 @@ export function Dashboard() {
                       {filters?.jurisdictions.map((j) => (
                         <CommandItem
                           key={j.name}
-                          onSelect={() => {
-                            setJurisdictionFilter(j.name);
-                            setJurisdictionPopoverOpen(false);
-                          }}
+                          onSelect={() => handleJurisdictionFilterChange(j.name)}
                           className="text-slate-300 hover:bg-slate-800"
                         >
                           <Check className={cn("mr-2 h-4 w-4", jurisdictionFilter === j.name ? "opacity-100" : "opacity-0")} />
@@ -503,10 +600,7 @@ export function Dashboard() {
                     <CommandEmpty>No call type found.</CommandEmpty>
                     <CommandGroup>
                       <CommandItem
-                        onSelect={() => {
-                          setCallTypeFilter('all');
-                          setCallTypePopoverOpen(false);
-                        }}
+                        onSelect={() => handleCallTypeFilterChange('all')}
                         className="text-slate-300 hover:bg-slate-800"
                       >
                         <Check className={cn("mr-2 h-4 w-4", callTypeFilter === 'all' ? "opacity-100" : "opacity-0")} />
@@ -515,10 +609,7 @@ export function Dashboard() {
                       {filteredCallTypes.map((ct) => (
                         <CommandItem
                           key={`${ct.name}-${ct.agencyType}`}
-                          onSelect={() => {
-                            setCallTypeFilter(ct.name);
-                            setCallTypePopoverOpen(false);
-                          }}
+                          onSelect={() => handleCallTypeFilterChange(ct.name)}
                           className="text-slate-300 hover:bg-slate-800"
                         >
                           <Check className={cn("mr-2 h-4 w-4", callTypeFilter === ct.name ? "opacity-100" : "opacity-0")} />
@@ -557,7 +648,7 @@ export function Dashboard() {
           {/* View Controls */}
           <div className="flex items-center gap-3">
             <span className="text-sm text-slate-400">
-              Showing {filteredEvents.length} of {events.length} events
+              Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, totalEvents)} of {totalEvents.toLocaleString()} events
             </span>
             
             <Separator orientation="vertical" className="h-6 bg-slate-700" />
@@ -622,16 +713,82 @@ export function Dashboard() {
           /* Unified Feed */
           <Card className="bg-slate-900/50 border-slate-700/50 backdrop-blur">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg flex items-center gap-2 text-white">
-                <Activity className="h-5 w-5 text-purple-400" />
-                Live Dispatch Feed
-                <Badge variant="secondary" className="ml-2 bg-purple-500/20 text-purple-400">
-                  {filteredEvents.length}
-                </Badge>
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2 text-white">
+                  <Activity className="h-5 w-5 text-purple-400" />
+                  Live Dispatch Feed
+                  <Badge variant="secondary" className="ml-2 bg-purple-500/20 text-purple-400">
+                    {totalEvents.toLocaleString()}
+                  </Badge>
+                </CardTitle>
+                
+                {/* Sort Controls */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Sort by:</span>
+                  <div className="flex rounded-lg overflow-hidden border border-slate-700 bg-slate-800/50">
+                    <button
+                      onClick={() => handleSort('call_created')}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1",
+                        sortBy === 'call_created' 
+                          ? "bg-purple-500 text-white" 
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
+                      )}
+                    >
+                      <Clock className="h-3 w-3" />
+                      Date
+                      {sortBy === 'call_created' && (
+                        sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleSort('call_type')}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1",
+                        sortBy === 'call_type' 
+                          ? "bg-purple-500 text-white" 
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
+                      )}
+                    >
+                      Type
+                      {sortBy === 'call_type' && (
+                        sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleSort('jurisdiction')}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1",
+                        sortBy === 'jurisdiction' 
+                          ? "bg-purple-500 text-white" 
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
+                      )}
+                    >
+                      Agency
+                      {sortBy === 'jurisdiction' && (
+                        sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleSort('address')}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1",
+                        sortBy === 'address' 
+                          ? "bg-purple-500 text-white" 
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
+                      )}
+                    >
+                      Address
+                      {sortBy === 'address' && (
+                        sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[700px] pr-4">
+              <ScrollArea className="h-[600px] pr-4">
                 <div className="space-y-2">
                   {loading ? (
                     Array.from({ length: 8 }).map((_, i) => <EventSkeleton key={i} />)
@@ -652,6 +809,87 @@ export function Dashboard() {
                   )}
                 </div>
               </ScrollArea>
+              
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-700">
+                  <div className="text-sm text-slate-400">
+                    Page {currentPage} of {totalPages}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={goToFirstPage}
+                      disabled={currentPage === 1 || loading}
+                      className="h-8 w-8 border-slate-700 bg-slate-800/50 hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      <ChevronsLeft className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={goToPreviousPage}
+                      disabled={currentPage === 1 || loading}
+                      className="h-8 w-8 border-slate-700 bg-slate-800/50 hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    
+                    {/* Page number buttons */}
+                    <div className="flex items-center gap-1 mx-2">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={currentPage === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => goToPage(pageNum)}
+                            disabled={loading}
+                            className={cn(
+                              "h-8 w-8 p-0",
+                              currentPage === pageNum 
+                                ? "bg-purple-500 hover:bg-purple-600" 
+                                : "border-slate-700 bg-slate-800/50 hover:bg-slate-700"
+                            )}
+                          >
+                            {pageNum}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={goToNextPage}
+                      disabled={currentPage === totalPages || loading}
+                      className="h-8 w-8 border-slate-700 bg-slate-800/50 hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={goToLastPage}
+                      disabled={currentPage === totalPages || loading}
+                      className="h-8 w-8 border-slate-700 bg-slate-800/50 hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      <ChevronsRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         ) : (

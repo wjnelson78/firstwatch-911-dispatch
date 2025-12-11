@@ -28,8 +28,16 @@ export interface FetchDispatchesParams {
   endDate?: string;
   /** Filter by event/agency type */
   eventType?: string;
+  /** Filter by jurisdiction */
+  jurisdiction?: string;
+  /** Filter by call type */
+  callType?: string;
   /** Full-text search query */
   search?: string;
+  /** Sort field */
+  sortBy?: 'call_created' | 'address' | 'call_type' | 'jurisdiction' | 'agency_type' | 'first_seen' | 'last_seen';
+  /** Sort direction */
+  sortOrder?: 'asc' | 'desc';
   /** Maximum number of results (default: 100) */
   limit?: number;
   /** Pagination offset (default: 0) */
@@ -37,27 +45,45 @@ export interface FetchDispatchesParams {
 }
 
 /**
+ * Response from the paginated dispatches endpoint
+ */
+export interface PaginatedDispatchesResponse {
+  events: DispatchEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+  pages: number;
+}
+
+/**
  * Fetch dispatch events from the API with optional filtering
  * 
  * @param params - Optional filtering and pagination parameters
- * @returns Promise resolving to array of dispatch events
+ * @returns Promise resolving to paginated dispatch response
  * @throws Error if the API request fails
  * 
  * @example
- * // Fetch latest 50 police events
- * const events = await fetchDispatches({ 
+ * // Fetch page 2 of police events sorted by date
+ * const response = await fetchDispatches({ 
  *   eventType: 'Police', 
- *   limit: 50 
+ *   limit: 100,
+ *   offset: 100,
+ *   sortBy: 'call_created',
+ *   sortOrder: 'desc'
  * });
  */
-export async function fetchDispatches(params?: FetchDispatchesParams): Promise<DispatchEvent[]> {
+export async function fetchDispatches(params?: FetchDispatchesParams): Promise<PaginatedDispatchesResponse> {
   const searchParams = new URLSearchParams();
   
   // Build query string from provided parameters
   if (params?.startDate) searchParams.set('startDate', params.startDate);
   if (params?.endDate) searchParams.set('endDate', params.endDate);
   if (params?.eventType) searchParams.set('eventType', params.eventType);
+  if (params?.jurisdiction) searchParams.set('jurisdiction', params.jurisdiction);
+  if (params?.callType) searchParams.set('callType', params.callType);
   if (params?.search) searchParams.set('search', params.search);
+  if (params?.sortBy) searchParams.set('sortBy', params.sortBy);
+  if (params?.sortOrder) searchParams.set('sortOrder', params.sortOrder);
   if (params?.limit) searchParams.set('limit', params.limit.toString());
   if (params?.offset) searchParams.set('offset', params.offset.toString());
 
