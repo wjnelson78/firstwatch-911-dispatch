@@ -91,14 +91,14 @@ class DispatchIngester:
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        # Create main events table with ALL possible fields
+        # Create main events table with ALL possible fields\n        # NOTE: call_number + call_created date is the unique identifier, NOT event_id (which changes every API call)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id SERIAL PRIMARY KEY,
-                event_id TEXT UNIQUE NOT NULL,
+                event_id TEXT,
                 
-                -- Core event fields
-                call_number TEXT,
+                -- Core event fields (call_number + call_created date is the stable unique identifier)
+                call_number TEXT NOT NULL,
                 address TEXT,
                 call_type TEXT,
                 units TEXT,
@@ -144,7 +144,7 @@ class DispatchIngester:
         """)
         
         # Create indexes for faster lookups
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_call_number ON events(call_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_call_created ON events(call_created)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_call_type ON events(call_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_jurisdiction ON events(jurisdiction)")
@@ -377,18 +377,26 @@ class DispatchIngester:
             for row in rows:
                 event = self._map_row_to_event(row, columns, source_title)
                 
-                if not event['event_id']:
+                # Use call_number + call_date as composite key (event_id from API changes every request)
+                # Call numbers reset daily, so we need both to uniquely identify an event
+                if not event['call_number'] or not event['call_created']:
                     continue
                 
-                # Check if event already exists
-                cursor.execute("SELECT id, times_seen FROM events WHERE event_id = %s", (event['event_id'],))
+                # Extract date from call_created for composite key
+                call_date = event['call_created'].date() if event['call_created'] else None
+                
+                # Check if event already exists by call_number + call_date (the stable composite identifier)
+                cursor.execute(
+                    "SELECT id, times_seen FROM events WHERE call_number = %s AND DATE(call_created) = %s", 
+                    (event['call_number'], call_date)
+                )
                 existing = cursor.fetchone()
                 
                 if existing:
-                    # Update last_seen timestamp and increment times_seen
+                    # Update last_seen timestamp, increment times_seen, and update event_id to latest
                     cursor.execute(
-                        "UPDATE events SET last_seen = %s, times_seen = times_seen + 1 WHERE event_id = %s",
-                        (now, event['event_id'])
+                        "UPDATE events SET last_seen = %s, times_seen = times_seen + 1, event_id = %s WHERE call_number = %s AND DATE(call_created) = %s",
+                        (now, event['event_id'], event['call_number'], call_date)
                     )
                     result['updated_events'] += 1
                 else:
