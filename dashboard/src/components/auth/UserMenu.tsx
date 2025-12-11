@@ -89,6 +89,7 @@ export function UserMenu({ jurisdictions = [], callTypes = [], onApplyFilter }: 
             variant="ghost"
             size="sm"
             onClick={handleOpenLogin}
+            data-auth-trigger
             className="text-slate-300 hover:text-white hover:bg-slate-800"
           >
             <LogIn className="w-4 h-4 mr-2" />
