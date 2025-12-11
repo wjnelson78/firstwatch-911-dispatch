@@ -49,7 +49,7 @@ export function ActiveUsers() {
    */
   const sendHeartbeat = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/api/heartbeat`, {
+      const response = await fetch(`${API_BASE}/heartbeat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -119,7 +119,7 @@ export function ActiveUsers() {
     const handleBeforeUnload = () => {
       // Use sendBeacon for reliable delivery during page unload
       navigator.sendBeacon(
-        `${API_URL}/api/heartbeat`,
+        `${API_BASE}/heartbeat`,
         JSON.stringify({
           sessionId: getSessionId(),
           isAuthenticated: !!user,
