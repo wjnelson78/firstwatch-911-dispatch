@@ -648,26 +648,37 @@ export function UserFeed() {
                   onMouseEnter={() => setHoveredReaction(post.id)}
                   onMouseLeave={() => setHoveredReaction(null)}
                 >
-                  {/* Emoji reaction picker popup */}
+                  {/* Emoji reaction picker popup or sign in message */}
                   {hoveredReaction === post.id && (
                     <div className="absolute bottom-full left-0 pb-2 z-50">
-                      <div className="bg-slate-800 rounded-full shadow-lg border border-slate-700 px-2 py-1.5 flex gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        {REACTIONS.map((reaction) => (
-                          <button
-                            key={reaction.type}
-                            onClick={() => handleReaction(post.id, reaction.type)}
-                            className={cn(
-                              "text-2xl hover:scale-125 transition-all p-1.5 rounded-full",
-                              post.userReaction === reaction.type 
-                                ? "bg-slate-600 ring-2 ring-blue-400 scale-110" 
-                                : "hover:bg-slate-700"
-                            )}
-                            title={reaction.label}
+                      {user ? (
+                        <div className="bg-slate-800 rounded-full shadow-lg border border-slate-700 px-2 py-1.5 flex gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                          {REACTIONS.map((reaction) => (
+                            <button
+                              key={reaction.type}
+                              onClick={() => handleReaction(post.id, reaction.type)}
+                              className={cn(
+                                "text-2xl hover:scale-125 transition-all p-1.5 rounded-full",
+                                post.userReaction === reaction.type 
+                                  ? "bg-slate-600 ring-2 ring-blue-400 scale-110" 
+                                  : "hover:bg-slate-700"
+                              )}
+                              title={reaction.label}
+                            >
+                              {reaction.emoji}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-slate-800 rounded-lg shadow-lg border border-slate-700 px-4 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 whitespace-nowrap">
+                          <button 
+                            onClick={() => document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click()}
+                            className="text-purple-400 hover:text-purple-300 text-sm font-medium"
                           >
-                            {reaction.emoji}
+                            Sign in to react to posts
                           </button>
-                        ))}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <Button
