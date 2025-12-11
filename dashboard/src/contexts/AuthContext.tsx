@@ -43,6 +43,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const initAuth = async () => {
       const storedUser = authService.getStoredUser();
       const accessToken = authService.getAccessToken();
+      const refreshToken = authService.getRefreshToken();
 
       if (storedUser && accessToken) {
         // Verify token is still valid by fetching profile
@@ -61,7 +62,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
             error: null,
           });
         } catch {
-          // Token invalid or expired, clear auth
+          // Token invalid or expired, try to refresh
+          if (refreshToken) {
+            const refreshed = await authService.refreshAccessToken();
+            if (refreshed) {
+              // Retry fetching profile with new token
+              try {
+                const profile = await authService.getProfile();
+                setState({
+                  user: {
+                    id: profile.id,
+                    email: profile.email,
+                    firstName: profile.firstName,
+                    lastName: profile.lastName,
+                    role: profile.role,
+                  },
+                  isAuthenticated: true,
+                  isLoading: false,
+                  error: null,
+                });
+                return;
+              } catch {
+                // Refresh worked but profile fetch failed
+              }
+            }
+          }
+          // Token refresh failed, clear auth
           authService.clearAuthData();
           setState({
             user: null,
@@ -70,6 +96,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
             error: null,
           });
         }
+      } else if (storedUser && refreshToken && !accessToken) {
+        // No access token but have refresh token - try to refresh
+        const refreshed = await authService.refreshAccessToken();
+        if (refreshed) {
+          try {
+            const profile = await authService.getProfile();
+            setState({
+              user: {
+                id: profile.id,
+                email: profile.email,
+                firstName: profile.firstName,
+                lastName: profile.lastName,
+                role: profile.role,
+              },
+              isAuthenticated: true,
+              isLoading: false,
+              error: null,
+            });
+            return;
+          } catch {
+            // Profile fetch failed
+          }
+        }
+        authService.clearAuthData();
+        setState({
+          user: null,
+          isAuthenticated: false,
+          isLoading: false,
+          error: null,
+        });
       } else {
         setState({
           user: null,

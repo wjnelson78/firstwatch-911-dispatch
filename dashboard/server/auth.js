@@ -18,8 +18,8 @@ const router = express.Router();
 
 // JWT Configuration
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
-const JWT_EXPIRES_IN = '15m';  // Access token expires in 15 minutes
-const REFRESH_TOKEN_EXPIRES_IN = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+const JWT_EXPIRES_IN = '8h';  // Access token expires in 8 hours
+const REFRESH_TOKEN_EXPIRES_IN = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 
 /**
  * Generate JWT access token
