@@ -74,6 +74,8 @@ interface Comment {
   content: string;
   createdAt: string;
   user: PostUser;
+  parentId?: number | null;
+  replies?: Comment[];
   likesCount?: number;
   userLiked?: boolean;
 }
@@ -158,6 +160,97 @@ const SAMPLE_COMMENTS: Record<number, Comment[]> = {
   ]
 };
 
+// CommentItem component for rendering comments with nested replies
+interface CommentItemProps {
+  comment: Comment;
+  postId: number;
+  depth: number;
+  user: { id: number; firstName: string; lastName: string } | null;
+  getAvatarColor: (userId: number) => string;
+  formatTime: (date: string) => string;
+  onReply: (commentId: number, userName: string) => void;
+}
+
+function CommentItem({ comment, postId, depth, user, getAvatarColor, formatTime, onReply }: CommentItemProps) {
+  const maxDepth = 3; // Limit nesting depth for UI clarity
+  const isNested = depth > 0;
+  
+  return (
+    <div className={cn("flex flex-col", isNested && "ml-10")}>
+      <div className="flex gap-2">
+        <div className={cn(
+          "rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
+          isNested ? "h-6 w-6" : "h-8 w-8",
+          getAvatarColor(comment.user.id)
+        )}>
+          {comment.user.initials}
+        </div>
+        <div className="flex-1">
+          <div className="inline-block bg-slate-800 rounded-2xl px-3 py-2 max-w-[90%]">
+            <p className="text-[13px] font-semibold text-white hover:underline cursor-pointer">
+              {comment.user.firstName} {comment.user.lastName}
+            </p>
+            <p className={cn("text-slate-200", isNested ? "text-[13px]" : "text-[15px]")}>{comment.content}</p>
+          </div>
+          <div className="flex items-center gap-3 mt-1 ml-3 text-xs">
+            <span className="text-slate-500">{formatTime(comment.createdAt)}</span>
+            <button 
+              className="text-slate-400 hover:underline font-semibold"
+              onClick={() => {
+                if (!user) {
+                  document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
+                }
+              }}
+              title={!user ? "Sign in to like" : "Like this comment"}
+            >
+              Like
+            </button>
+            {depth < maxDepth && (
+              <button 
+                className="text-slate-400 hover:underline font-semibold"
+                onClick={() => {
+                  if (!user) {
+                    document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
+                  } else {
+                    onReply(comment.id, `${comment.user.firstName} ${comment.user.lastName}`);
+                  }
+                }}
+                title={!user ? "Sign in to reply" : "Reply to this comment"}
+              >
+                Reply
+              </button>
+            )}
+            {(comment.likesCount ?? 0) > 0 && (
+              <span className="flex items-center gap-1 text-slate-500">
+                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-500 text-[8px]">👍</span>
+                {comment.likesCount}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      {/* Nested replies */}
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {comment.replies.map(reply => (
+            <CommentItem
+              key={reply.id}
+              comment={reply}
+              postId={postId}
+              depth={depth + 1}
+              user={user}
+              getAvatarColor={getAvatarColor}
+              formatTime={formatTime}
+              onReply={onReply}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface UserFeedProps {
   prefilledEvent?: DispatchEvent | null;
   onEventHandled?: () => void;
@@ -173,6 +266,7 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
   const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
   const [postComments, setPostComments] = useState<Record<number, Comment[]>>(SAMPLE_COMMENTS);
   const [newComments, setNewComments] = useState<Record<number, string>>({});
+  const [replyingTo, setReplyingTo] = useState<{ postId: number; commentId: number; userName: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -376,8 +470,8 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
     }
   };
 
-  // Add comment
-  const handleAddComment = async (postId: number) => {
+  // Add comment or reply
+  const handleAddComment = async (postId: number, parentId?: number) => {
     const commentText = newComments[postId]?.trim();
     if (!commentText) return;
     
@@ -391,20 +485,49 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`
         },
-        body: JSON.stringify({ content: commentText })
+        body: JSON.stringify({ 
+          content: commentText,
+          parentId: parentId || null
+        })
       });
       
       if (!response.ok) throw new Error('Failed to add comment');
       
       const newComment = await response.json();
-      setPostComments(prev => ({
-        ...prev,
-        [postId]: [...(prev[postId] || []), newComment]
-      }));
+      
+      // Add to correct location (root or as reply)
+      setPostComments(prev => {
+        const comments = [...(prev[postId] || [])];
+        if (parentId) {
+          // Find parent comment and add reply
+          const addReplyToComment = (items: Comment[]): Comment[] => {
+            return items.map(comment => {
+              if (comment.id === parentId) {
+                return {
+                  ...comment,
+                  replies: [...(comment.replies || []), newComment]
+                };
+              }
+              if (comment.replies?.length) {
+                return {
+                  ...comment,
+                  replies: addReplyToComment(comment.replies)
+                };
+              }
+              return comment;
+            });
+          };
+          return { ...prev, [postId]: addReplyToComment(comments) };
+        } else {
+          return { ...prev, [postId]: [...comments, newComment] };
+        }
+      });
+      
       setPosts(prev => prev.map(post =>
         post.id === postId ? { ...post, commentsCount: post.commentsCount + 1 } : post
       ));
       setNewComments(prev => ({ ...prev, [postId]: '' }));
+      setReplyingTo(null);
     } catch (err) {
       console.error('Error adding comment:', err);
     }
@@ -787,58 +910,41 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
                   </button>
                 )}
 
-                {/* Existing Comments */}
+                {/* Existing Comments with Threaded Replies */}
                 {expandedComments.has(post.id) && postComments[post.id]?.length > 0 && (
                   <div className="space-y-3">
                     {postComments[post.id].map(comment => (
-                      <div key={comment.id} className="flex gap-2">
-                        <div className={cn(
-                          "h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-medium flex-shrink-0",
-                          getAvatarColor(comment.user.id)
-                        )}>
-                          {comment.user.initials}
-                        </div>
-                        <div className="flex-1">
-                          <div className="inline-block bg-slate-800 rounded-2xl px-3 py-2 max-w-[90%]">
-                            <p className="text-[13px] font-semibold text-white hover:underline cursor-pointer">
-                              {comment.user.firstName} {comment.user.lastName}
-                            </p>
-                            <p className="text-[15px] text-slate-200">{comment.content}</p>
-                          </div>
-                          <div className="flex items-center gap-3 mt-1 ml-3 text-xs">
-                            <span className="text-slate-500">{formatTime(comment.createdAt)}</span>
-                            <button 
-                              className="text-slate-400 hover:underline font-semibold"
-                              onClick={() => {
-                                if (!user) {
-                                  document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
-                                }
-                              }}
-                              title={!user ? "Sign in to like" : "Like this comment"}
-                            >
-                              {!user ? "Like" : "Like"}
-                            </button>
-                            <button 
-                              className="text-slate-400 hover:underline font-semibold"
-                              onClick={() => {
-                                if (!user) {
-                                  document.querySelector<HTMLButtonElement>('[data-auth-trigger]')?.click();
-                                }
-                              }}
-                              title={!user ? "Sign in to reply" : "Reply to this comment"}
-                            >
-                              {!user ? "Reply" : "Reply"}
-                            </button>
-                            {(comment.likesCount ?? 0) > 0 && (
-                              <span className="flex items-center gap-1 text-slate-500">
-                                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-500 text-[8px]">👍</span>
-                                {comment.likesCount}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
+                      <CommentItem 
+                        key={comment.id} 
+                        comment={comment} 
+                        postId={post.id}
+                        depth={0}
+                        user={user}
+                        getAvatarColor={getAvatarColor}
+                        formatTime={formatTime}
+                        onReply={(commentId, userName) => {
+                          setReplyingTo({ postId: post.id, commentId, userName });
+                          setNewComments(prev => ({ ...prev, [post.id]: `@${userName} ` }));
+                        }}
+                      />
                     ))}
+                  </div>
+                )}
+
+                {/* Reply indicator */}
+                {replyingTo?.postId === post.id && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-800/50 px-3 py-1 rounded">
+                    <span>Replying to <strong className="text-white">{replyingTo.userName}</strong></span>
+                    <button 
+                      onClick={() => {
+                        setReplyingTo(null);
+                        setNewComments(prev => ({ ...prev, [post.id]: '' }));
+                      }}
+                      className="text-slate-500 hover:text-white"
+                      title="Cancel reply"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   </div>
                 )}
 
@@ -856,12 +962,14 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
                         <Input
                           value={newComments[post.id] || ''}
                           onChange={(e) => setNewComments(prev => ({ ...prev, [post.id]: e.target.value }))}
-                          placeholder={`Comment as ${user.firstName} ${user.lastName}`}
+                          placeholder={replyingTo?.postId === post.id 
+                            ? `Reply to ${replyingTo.userName}...` 
+                            : `Comment as ${user.firstName} ${user.lastName}`}
                           className="bg-slate-800 border-0 text-white placeholder:text-slate-500 rounded-full pr-24 focus-visible:ring-1 focus-visible:ring-slate-600"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
-                              handleAddComment(post.id);
+                              handleAddComment(post.id, replyingTo?.postId === post.id ? replyingTo.commentId : undefined);
                             }
                           }}
                           onFocus={() => {
@@ -882,7 +990,7 @@ export function UserFeed({ prefilledEvent, onEventHandled }: UserFeedProps) {
                           </button>
                           {newComments[post.id]?.trim() && (
                             <button 
-                              onClick={() => handleAddComment(post.id)}
+                              onClick={() => handleAddComment(post.id, replyingTo?.postId === post.id ? replyingTo.commentId : undefined)}
                               className="p-1 text-purple-400 hover:text-purple-300"
                               title="Send"
                             >

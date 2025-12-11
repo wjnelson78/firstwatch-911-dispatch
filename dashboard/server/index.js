@@ -1010,7 +1010,7 @@ app.post('/api/feed/posts/:id/react', authenticateToken, async (req, res) => {
 });
 
 /**
- * Get comments for a post
+ * Get comments for a post (with threaded replies)
  * 
  * @route GET /api/feed/posts/:id/comments
  */
@@ -1018,7 +1018,7 @@ app.get('/api/feed/posts/:id/comments', async (req, res) => {
   try {
     const postId = parseInt(req.params.id);
     const result = await pool.query(
-      `SELECT c.id, c.content, c.created_at,
+      `SELECT c.id, c.content, c.created_at, c.parent_id,
         u.id as user_id, u.username, u.first_name, u.last_name
        FROM post_comments c
        JOIN users u ON c.user_id = u.id
@@ -1027,19 +1027,41 @@ app.get('/api/feed/posts/:id/comments', async (req, res) => {
       [postId]
     );
 
-    const comments = result.rows.map(row => ({
-      id: row.id,
-      content: row.content,
-      createdAt: row.created_at,
-      user: {
-        id: row.user_id,
-        firstName: row.first_name,
-        lastName: row.last_name,
-        initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
-      }
-    }));
+    // Build nested comment structure
+    const commentsMap = new Map();
+    const rootComments: any[] = [];
 
-    res.json({ comments });
+    // First pass: create all comment objects
+    result.rows.forEach(row => {
+      const comment = {
+        id: row.id,
+        content: row.content,
+        createdAt: row.created_at,
+        parentId: row.parent_id,
+        user: {
+          id: row.user_id,
+          firstName: row.first_name,
+          lastName: row.last_name,
+          initials: `${row.first_name?.[0] || ''}${row.last_name?.[0] || ''}`.toUpperCase()
+        },
+        replies: []
+      };
+      commentsMap.set(row.id, comment);
+    });
+
+    // Second pass: build tree structure
+    commentsMap.forEach(comment => {
+      if (comment.parentId) {
+        const parent = commentsMap.get(comment.parentId);
+        if (parent) {
+          parent.replies.push(comment);
+        }
+      } else {
+        rootComments.push(comment);
+      }
+    });
+
+    res.json({ comments: rootComments });
   } catch (error) {
     console.error('Error fetching comments:', error);
     res.status(500).json({ error: 'Failed to fetch comments' });
@@ -1047,16 +1069,17 @@ app.get('/api/feed/posts/:id/comments', async (req, res) => {
 });
 
 /**
- * Add comment to a post
+ * Add comment to a post (with optional reply support)
  * 
  * @route POST /api/feed/posts/:id/comments
  * @body {string} content - Comment content
+ * @body {number} parentId - Optional parent comment ID for replies
  */
 app.post('/api/feed/posts/:id/comments', authenticateToken, async (req, res) => {
   try {
     const postId = parseInt(req.params.id);
     const userId = req.user.id;
-    const { content } = req.body;
+    const { content, parentId } = req.body;
 
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       return res.status(400).json({ error: 'Comment content is required' });
@@ -1066,13 +1089,24 @@ app.post('/api/feed/posts/:id/comments', authenticateToken, async (req, res) => 
       return res.status(400).json({ error: 'Comment must be 1000 characters or less' });
     }
 
+    // Validate parent comment exists and belongs to same post
+    if (parentId) {
+      const parentCheck = await pool.query(
+        'SELECT id FROM post_comments WHERE id = $1 AND post_id = $2',
+        [parentId, postId]
+      );
+      if (parentCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Invalid parent comment' });
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       const result = await client.query(
-        'INSERT INTO post_comments (post_id, user_id, content) VALUES ($1, $2, $3) RETURNING *',
-        [postId, userId, content.trim()]
+        'INSERT INTO post_comments (post_id, user_id, content, parent_id) VALUES ($1, $2, $3, $4) RETURNING *',
+        [postId, userId, content.trim(), parentId || null]
       );
 
       await client.query('UPDATE user_posts SET comments_count = comments_count + 1 WHERE id = $1', [postId]);
@@ -1086,12 +1120,14 @@ app.post('/api/feed/posts/:id/comments', authenticateToken, async (req, res) => 
         id: result.rows[0].id,
         content: result.rows[0].content,
         createdAt: result.rows[0].created_at,
+        parentId: result.rows[0].parent_id,
         user: {
           id: userId,
           firstName: user.first_name,
           lastName: user.last_name,
           initials: `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase()
-        }
+        },
+        replies: []
       });
     } catch (e) {
       await client.query('ROLLBACK');
