@@ -14,8 +14,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Users, UserCheck, Eye } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
-// API base URL
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002';
+// API base URL - use the same base as api.ts
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3002/api';
 
 // Generate a unique session ID for this browser tab
 const getSessionId = () => {
