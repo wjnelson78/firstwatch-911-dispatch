@@ -9,11 +9,15 @@
  */
 
 import { useState } from 'react';
-import { Shield, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { AdminLayout, type AdminView } from './AdminLayout';
 import { AdminDashboard } from './AdminDashboard';
 import { UserManagement } from './UserManagement';
 import { IncidentManagement } from './IncidentManagement';
+import { AgencyManagement } from './AgencyManagement';
+import { EmailNotifications } from './EmailNotifications';
+import { AuditLog } from './AuditLog';
+import { SystemSettings } from './SystemSettings';
 import { useAdmin } from '@/contexts/AdminContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -75,37 +79,13 @@ export function AdminPage({ onExit }: AdminPageProps) {
       case 'incidents':
         return <IncidentManagement />;
       case 'agencies':
-        return (
-          <PlaceholderView 
-            title="Agency Configuration" 
-            description="Configure agency email notifications and settings"
-            icon={<Shield className="h-12 w-12" />}
-          />
-        );
+        return <AgencyManagement />;
       case 'email':
-        return (
-          <PlaceholderView 
-            title="Email Notifications" 
-            description="Configure email notification rules and templates"
-            icon={<Shield className="h-12 w-12" />}
-          />
-        );
+        return <EmailNotifications />;
       case 'audit':
-        return (
-          <PlaceholderView 
-            title="Audit Log" 
-            description="View admin activity and system events"
-            icon={<Shield className="h-12 w-12" />}
-          />
-        );
+        return <AuditLog />;
       case 'settings':
-        return (
-          <PlaceholderView 
-            title="System Settings" 
-            description="Configure global system settings"
-            icon={<Shield className="h-12 w-12" />}
-          />
-        );
+        return <SystemSettings />;
       default:
         return <AdminDashboard />;
     }
@@ -115,32 +95,6 @@ export function AdminPage({ onExit }: AdminPageProps) {
     <AdminLayout currentView={currentView} onViewChange={setCurrentView}>
       {renderView()}
     </AdminLayout>
-  );
-}
-
-// Placeholder for views not yet implemented
-function PlaceholderView({ 
-  title, 
-  description, 
-  icon 
-}: { 
-  title: string; 
-  description: string; 
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center h-[60vh] text-center">
-      <div className="text-muted-foreground/30 mb-4">
-        {icon}
-      </div>
-      <h2 className="text-xl font-semibold mb-2">{title}</h2>
-      <p className="text-muted-foreground max-w-md">
-        {description}
-      </p>
-      <p className="text-sm text-muted-foreground mt-4">
-        Coming soon...
-      </p>
-    </div>
   );
 }
 
