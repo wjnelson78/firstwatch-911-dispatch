@@ -27,7 +27,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import createAuthRouter, { authenticateToken, optionalAuth } from './auth.js';
+import createAuthRouter, { authenticateToken, optionalAuth, requireRole } from './auth.js';
 
 // ESM __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -461,6 +461,48 @@ app.get('/api/filters', async (req, res) => {
   } catch (error) {
     console.error('Error fetching filters:', error);
     res.status(500).json({ error: 'Failed to fetch filters' });
+  }
+});
+
+/**
+ * Get agencies list for incident reporting
+ * Returns all known agencies/jurisdictions grouped by type
+ * 
+ * @route GET /api/agencies
+ */
+app.get('/api/agencies', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT jurisdiction as name, agency_type as type
+       FROM events
+       WHERE jurisdiction IS NOT NULL
+       ORDER BY agency_type, jurisdiction`
+    );
+    
+    // Group by agency type
+    const grouped = {
+      Police: [],
+      Fire: [],
+      EMS: [],
+      Other: []
+    };
+    
+    result.rows.forEach(row => {
+      const type = row.type || 'Other';
+      if (grouped[type]) {
+        grouped[type].push(row.name);
+      } else {
+        grouped.Other.push(row.name);
+      }
+    });
+    
+    res.json({
+      agencies: result.rows.map(r => ({ name: r.name, type: r.type || 'Other' })),
+      grouped
+    });
+  } catch (error) {
+    console.error('Error fetching agencies:', error);
+    res.status(500).json({ error: 'Failed to fetch agencies' });
   }
 });
 
@@ -1157,12 +1199,17 @@ app.post('/api/incidents', optionalAuth, async (req, res) => {
       reporterName, reporterPhone, reporterEmail,
       incidentType, incidentDate, locationAddress, locationCity, locationZip,
       description, personsInvolved, vehiclesInvolved,
-      injuriesReported, injuryDetails, witnessInfo
+      injuriesReported, injuryDetails, witnessInfo,
+      // New enhanced fields
+      targetAgency, agencyType, severity, urgency,
+      propertyDamage, damageDescription, estimatedDamageValue,
+      weatherConditions, lightingConditions, roadConditions,
+      isAnonymous, linkedDispatchEventId
     } = req.body;
 
-    // Validation
-    if (!reporterName || !reporterPhone || !reporterEmail) {
-      return res.status(400).json({ error: 'Reporter contact information is required' });
+    // Validation - allow anonymous reports without contact info
+    if (!isAnonymous && (!reporterName || !reporterPhone || !reporterEmail)) {
+      return res.status(400).json({ error: 'Reporter contact information is required (or submit anonymously)' });
     }
 
     if (!incidentType || !incidentDate || !locationAddress || !description) {
@@ -1186,14 +1233,28 @@ app.post('/api/incidents', optionalAuth, async (req, res) => {
         incident_number, user_id, reporter_name, reporter_phone, reporter_email,
         incident_type, incident_date, location_address, location_city, location_zip,
         description, persons_involved, vehicles_involved,
-        injuries_reported, injury_details, witness_info, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'submitted')
+        injuries_reported, injury_details, witness_info, status,
+        target_agency, agency_type, severity, urgency,
+        property_damage, damage_description, estimated_damage_value,
+        weather_conditions, lighting_conditions, road_conditions,
+        is_anonymous, linked_dispatch_event_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'submitted',
+                $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
       RETURNING id, incident_number, status, created_at`,
       [
-        incidentNumber, userId, reporterName, reporterPhone, reporterEmail,
+        incidentNumber, 
+        userId, 
+        isAnonymous ? null : reporterName, 
+        isAnonymous ? null : reporterPhone, 
+        isAnonymous ? null : reporterEmail,
         incidentType, incidentDate, locationAddress, locationCity || null, locationZip || null,
         description, personsInvolved || null, vehiclesInvolved || null,
-        injuriesReported || false, injuryDetails || null, witnessInfo || null
+        injuriesReported || false, injuryDetails || null, witnessInfo || null,
+        targetAgency || null, agencyType || null, 
+        severity || 'moderate', urgency || 'routine',
+        propertyDamage || false, damageDescription || null, estimatedDamageValue || null,
+        weatherConditions || null, lightingConditions || null, roadConditions || null,
+        isAnonymous || false, linkedDispatchEventId || null
       ]
     );
 
@@ -1598,4 +1659,721 @@ app.post('/api/conversations/:id/messages', authenticateToken, async (req, res) 
 
 app.listen(PORT, () => {
   console.log(`🚀 API Server running on http://localhost:${PORT}`);
+});
+
+// ============================================================================
+// ADMIN API ROUTES
+// All routes require admin role authentication
+// ============================================================================
+
+/**
+ * Admin Dashboard Overview
+ * Returns aggregate statistics for the admin dashboard
+ * 
+ * @route GET /api/admin/dashboard
+ */
+app.get('/api/admin/dashboard', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    // Get user statistics
+    const usersStats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(*) FILTER (WHERE is_active = true) as active_users,
+        COUNT(*) FILTER (WHERE role = 'admin') as admin_count,
+        COUNT(*) FILTER (WHERE role = 'moderator') as moderator_count,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as new_users_week,
+        COUNT(*) FILTER (WHERE last_login > NOW() - INTERVAL '24 hours') as users_logged_in_today
+      FROM users
+    `);
+
+    // Get incident report statistics
+    const incidentsStats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_reports,
+        COUNT(*) FILTER (WHERE status = 'submitted') as pending_reports,
+        COUNT(*) FILTER (WHERE status = 'under_review') as under_review,
+        COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
+        COUNT(*) FILTER (WHERE status = 'dismissed') as dismissed,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as reports_this_week,
+        COUNT(*) FILTER (WHERE severity = 'critical') as critical_reports
+      FROM incident_reports
+    `);
+
+    // Get feed post statistics
+    const feedStats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_posts,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as posts_today,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as posts_this_week
+      FROM feed_posts
+    `);
+
+    // Get dispatch statistics
+    const dispatchStats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_dispatches,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as dispatches_today,
+        COUNT(DISTINCT agency) as unique_agencies
+      FROM events
+    `);
+
+    res.json({
+      users: usersStats.rows[0],
+      incidents: incidentsStats.rows[0],
+      feed: feedStats.rows[0],
+      dispatches: dispatchStats.rows[0],
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Admin dashboard error:', error);
+    res.status(500).json({ error: 'Failed to fetch admin dashboard data' });
+  }
+});
+
+/**
+ * List all users with pagination and filtering
+ * 
+ * @route GET /api/admin/users
+ * @query {number} page - Page number (default: 1)
+ * @query {number} limit - Items per page (default: 25)
+ * @query {string} search - Search by email, username, name
+ * @query {string} role - Filter by role (user, admin, moderator)
+ * @query {string} status - Filter by status (active, inactive)
+ */
+app.get('/api/admin/users', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 25, 100);
+    const offset = (page - 1) * limit;
+    const { search, role, status } = req.query;
+
+    let whereConditions = [];
+    let params = [];
+    let paramIndex = 1;
+
+    if (search) {
+      whereConditions.push(`(
+        email ILIKE $${paramIndex} OR 
+        username ILIKE $${paramIndex} OR 
+        first_name ILIKE $${paramIndex} OR 
+        last_name ILIKE $${paramIndex}
+      )`);
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (role && ['user', 'admin', 'moderator'].includes(role)) {
+      whereConditions.push(`role = $${paramIndex}`);
+      params.push(role);
+      paramIndex++;
+    }
+
+    if (status === 'active') {
+      whereConditions.push('is_active = true');
+    } else if (status === 'inactive') {
+      whereConditions.push('is_active = false');
+    }
+
+    const whereClause = whereConditions.length > 0 
+      ? `WHERE ${whereConditions.join(' AND ')}` 
+      : '';
+
+    // Get total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM users ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get users
+    const result = await pool.query(
+      `SELECT id, email, username, first_name, last_name, role, is_active, 
+              email_verified, created_at, last_login
+       FROM users ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    res.json({
+      users: result.rows.map(user => ({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        role: user.role,
+        isActive: user.is_active,
+        emailVerified: user.email_verified,
+        createdAt: user.created_at,
+        lastLogin: user.last_login
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Admin list users error:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+/**
+ * Get single user details
+ * 
+ * @route GET /api/admin/users/:id
+ */
+app.get('/api/admin/users/:id', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    const result = await pool.query(
+      `SELECT u.id, u.email, u.username, u.first_name, u.last_name, u.role, 
+              u.is_active, u.email_verified, u.created_at, u.last_login, u.updated_at,
+              p.default_view, p.favorite_jurisdictions, p.notification_enabled, p.theme
+       FROM users u
+       LEFT JOIN user_preferences p ON u.id = p.user_id
+       WHERE u.id = $1`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
+
+    // Get user's activity stats
+    const activityStats = await pool.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM feed_posts WHERE user_id = $1) as posts_count,
+        (SELECT COUNT(*) FROM incident_reports WHERE reporter_id = $1) as reports_count,
+        (SELECT COUNT(*) FROM chat_messages WHERE user_id = $1) as messages_count
+    `, [userId]);
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      role: user.role,
+      isActive: user.is_active,
+      emailVerified: user.email_verified,
+      createdAt: user.created_at,
+      lastLogin: user.last_login,
+      updatedAt: user.updated_at,
+      preferences: {
+        defaultView: user.default_view,
+        favoriteJurisdictions: user.favorite_jurisdictions,
+        notificationEnabled: user.notification_enabled,
+        theme: user.theme
+      },
+      activity: activityStats.rows[0]
+    });
+  } catch (error) {
+    console.error('Admin get user error:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+/**
+ * Update user (role, status)
+ * 
+ * @route PUT /api/admin/users/:id
+ * @body {string} role - New role (user, admin, moderator)
+ * @body {boolean} isActive - Account active status
+ */
+app.put('/api/admin/users/:id', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { role, isActive } = req.body;
+    const adminId = req.user.id;
+
+    // Prevent self-demotion
+    if (userId === adminId && role && role !== 'admin') {
+      return res.status(400).json({ error: 'Cannot change your own role' });
+    }
+
+    // Prevent self-deactivation
+    if (userId === adminId && isActive === false) {
+      return res.status(400).json({ error: 'Cannot deactivate your own account' });
+    }
+
+    const updates = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (role && ['user', 'admin', 'moderator'].includes(role)) {
+      updates.push(`role = $${paramIndex}`);
+      params.push(role);
+      paramIndex++;
+    }
+
+    if (typeof isActive === 'boolean') {
+      updates.push(`is_active = $${paramIndex}`);
+      params.push(isActive);
+      paramIndex++;
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid updates provided' });
+    }
+
+    updates.push('updated_at = NOW()');
+    params.push(userId);
+
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} 
+       RETURNING id, email, username, first_name, last_name, role, is_active`,
+      params
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
+
+    // Log admin action
+    await pool.query(
+      `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+       VALUES ($1, 'user_update', 'user', $2, $3)`,
+      [adminId, userId, JSON.stringify({ role, isActive })]
+    ).catch(() => {}); // Don't fail if audit table doesn't exist yet
+
+    res.json({
+      message: 'User updated successfully',
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        role: user.role,
+        isActive: user.is_active
+      }
+    });
+  } catch (error) {
+    console.error('Admin update user error:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+/**
+ * List all incident reports with pagination and filtering
+ * 
+ * @route GET /api/admin/incidents
+ * @query {number} page - Page number
+ * @query {number} limit - Items per page
+ * @query {string} status - Filter by status
+ * @query {string} severity - Filter by severity
+ * @query {string} agency - Filter by target agency
+ */
+app.get('/api/admin/incidents', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 25, 100);
+    const offset = (page - 1) * limit;
+    const { status, severity, agency, search } = req.query;
+
+    let whereConditions = [];
+    let params = [];
+    let paramIndex = 1;
+
+    if (status) {
+      whereConditions.push(`ir.status = $${paramIndex}`);
+      params.push(status);
+      paramIndex++;
+    }
+
+    if (severity) {
+      whereConditions.push(`ir.severity = $${paramIndex}`);
+      params.push(severity);
+      paramIndex++;
+    }
+
+    if (agency) {
+      whereConditions.push(`ir.target_agency ILIKE $${paramIndex}`);
+      params.push(`%${agency}%`);
+      paramIndex++;
+    }
+
+    if (search) {
+      whereConditions.push(`(
+        ir.description ILIKE $${paramIndex} OR 
+        ir.location ILIKE $${paramIndex} OR
+        ir.title ILIKE $${paramIndex}
+      )`);
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    const whereClause = whereConditions.length > 0 
+      ? `WHERE ${whereConditions.join(' AND ')}` 
+      : '';
+
+    // Get total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM incident_reports ir ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get incidents with reporter info
+    const result = await pool.query(
+      `SELECT ir.*, 
+              u.email as reporter_email, u.first_name as reporter_first_name, 
+              u.last_name as reporter_last_name
+       FROM incident_reports ir
+       LEFT JOIN users u ON ir.reporter_id = u.id
+       ${whereClause}
+       ORDER BY ir.created_at DESC
+       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      [...params, limit, offset]
+    );
+
+    res.json({
+      incidents: result.rows.map(incident => ({
+        id: incident.id,
+        title: incident.title,
+        incidentType: incident.incident_type,
+        description: incident.description,
+        location: incident.location,
+        targetAgency: incident.target_agency,
+        agencyType: incident.agency_type,
+        severity: incident.severity,
+        urgency: incident.urgency,
+        status: incident.status,
+        propertyDamage: incident.property_damage,
+        damageDescription: incident.damage_description,
+        estimatedDamageValue: incident.estimated_damage_value,
+        weatherConditions: incident.weather_conditions,
+        lightingConditions: incident.lighting_conditions,
+        roadConditions: incident.road_conditions,
+        isAnonymous: incident.is_anonymous,
+        mediaUrls: incident.media_urls,
+        linkedDispatchEventId: incident.linked_dispatch_event_id,
+        createdAt: incident.created_at,
+        updatedAt: incident.updated_at,
+        reporter: incident.is_anonymous ? null : {
+          id: incident.reporter_id,
+          email: incident.reporter_email,
+          firstName: incident.reporter_first_name,
+          lastName: incident.reporter_last_name
+        }
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Admin list incidents error:', error);
+    res.status(500).json({ error: 'Failed to fetch incidents' });
+  }
+});
+
+/**
+ * Get single incident report details
+ * 
+ * @route GET /api/admin/incidents/:id
+ */
+app.get('/api/admin/incidents/:id', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const incidentId = parseInt(req.params.id);
+
+    const result = await pool.query(
+      `SELECT ir.*, 
+              u.email as reporter_email, u.first_name as reporter_first_name, 
+              u.last_name as reporter_last_name, u.username as reporter_username
+       FROM incident_reports ir
+       LEFT JOIN users u ON ir.reporter_id = u.id
+       WHERE ir.id = $1`,
+      [incidentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    const incident = result.rows[0];
+
+    res.json({
+      id: incident.id,
+      title: incident.title,
+      incidentType: incident.incident_type,
+      description: incident.description,
+      location: incident.location,
+      latitude: incident.latitude,
+      longitude: incident.longitude,
+      targetAgency: incident.target_agency,
+      agencyType: incident.agency_type,
+      severity: incident.severity,
+      urgency: incident.urgency,
+      status: incident.status,
+      propertyDamage: incident.property_damage,
+      damageDescription: incident.damage_description,
+      estimatedDamageValue: incident.estimated_damage_value,
+      weatherConditions: incident.weather_conditions,
+      lightingConditions: incident.lighting_conditions,
+      roadConditions: incident.road_conditions,
+      isAnonymous: incident.is_anonymous,
+      mediaUrls: incident.media_urls,
+      linkedDispatchEventId: incident.linked_dispatch_event_id,
+      contactPhone: incident.is_anonymous ? null : incident.contact_phone,
+      contactEmail: incident.is_anonymous ? null : incident.contact_email,
+      createdAt: incident.created_at,
+      updatedAt: incident.updated_at,
+      reporter: incident.is_anonymous ? null : {
+        id: incident.reporter_id,
+        email: incident.reporter_email,
+        username: incident.reporter_username,
+        firstName: incident.reporter_first_name,
+        lastName: incident.reporter_last_name
+      }
+    });
+  } catch (error) {
+    console.error('Admin get incident error:', error);
+    res.status(500).json({ error: 'Failed to fetch incident' });
+  }
+});
+
+/**
+ * Update incident report status
+ * 
+ * @route PUT /api/admin/incidents/:id
+ * @body {string} status - New status (submitted, under_review, investigating, resolved, dismissed)
+ * @body {string} adminNotes - Notes from admin
+ */
+app.put('/api/admin/incidents/:id', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const incidentId = parseInt(req.params.id);
+    const { status, adminNotes } = req.body;
+    const adminId = req.user.id;
+
+    const validStatuses = ['submitted', 'under_review', 'investigating', 'resolved', 'dismissed'];
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const updates = [];
+    const params = [];
+    let paramIndex = 1;
+
+    if (status) {
+      updates.push(`status = $${paramIndex}`);
+      params.push(status);
+      paramIndex++;
+    }
+
+    if (adminNotes !== undefined) {
+      updates.push(`admin_notes = $${paramIndex}`);
+      params.push(adminNotes);
+      paramIndex++;
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid updates provided' });
+    }
+
+    updates.push('updated_at = NOW()');
+    params.push(incidentId);
+
+    const result = await pool.query(
+      `UPDATE incident_reports SET ${updates.join(', ')} WHERE id = $${paramIndex}
+       RETURNING id, status, admin_notes, updated_at`,
+      params
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    // Log admin action
+    await pool.query(
+      `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+       VALUES ($1, 'incident_update', 'incident_report', $2, $3)`,
+      [adminId, incidentId, JSON.stringify({ status, adminNotes })]
+    ).catch(() => {});
+
+    res.json({
+      message: 'Incident updated successfully',
+      incident: {
+        id: result.rows[0].id,
+        status: result.rows[0].status,
+        adminNotes: result.rows[0].admin_notes,
+        updatedAt: result.rows[0].updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Admin update incident error:', error);
+    res.status(500).json({ error: 'Failed to update incident' });
+  }
+});
+
+/**
+ * Get agency configuration list
+ * 
+ * @route GET /api/admin/agencies
+ */
+app.get('/api/admin/agencies', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    // Check if agency_settings table exists, if not return agencies from events
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'agency_settings'
+      )
+    `);
+
+    if (tableCheck.rows[0].exists) {
+      const result = await pool.query(`
+        SELECT * FROM agency_settings ORDER BY name ASC
+      `);
+      res.json({ agencies: result.rows, source: 'agency_settings' });
+    } else {
+      // Fallback: get unique agencies from events table
+      const result = await pool.query(`
+        SELECT DISTINCT agency as name, 
+               CASE 
+                 WHEN agency ILIKE '%police%' OR agency ILIKE '%sheriff%' THEN 'police'
+                 WHEN agency ILIKE '%fire%' THEN 'fire'
+                 WHEN agency ILIKE '%medic%' OR agency ILIKE '%aid%' OR agency ILIKE '%ems%' THEN 'ems'
+                 ELSE 'other'
+               END as agency_type,
+               COUNT(*) as dispatch_count
+        FROM events 
+        WHERE agency IS NOT NULL AND agency != ''
+        GROUP BY agency
+        ORDER BY agency ASC
+      `);
+      res.json({ 
+        agencies: result.rows.map(a => ({
+          name: a.name,
+          agencyType: a.agency_type,
+          dispatchCount: parseInt(a.dispatch_count),
+          emailEnabled: false,
+          emailAddresses: []
+        })),
+        source: 'events_derived'
+      });
+    }
+  } catch (error) {
+    console.error('Admin get agencies error:', error);
+    res.status(500).json({ error: 'Failed to fetch agencies' });
+  }
+});
+
+/**
+ * Delete user account (soft delete - deactivate)
+ * 
+ * @route DELETE /api/admin/users/:id
+ */
+app.delete('/api/admin/users/:id', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const adminId = req.user.id;
+
+    // Prevent self-deletion
+    if (userId === adminId) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+
+    // Soft delete - just deactivate
+    const result = await pool.query(
+      `UPDATE users SET is_active = false, updated_at = NOW() 
+       WHERE id = $1 RETURNING id, email`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Log admin action
+    await pool.query(
+      `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+       VALUES ($1, 'user_deactivate', 'user', $2, $3)`,
+      [adminId, userId, JSON.stringify({ email: result.rows[0].email })]
+    ).catch(() => {});
+
+    res.json({ message: 'User account deactivated successfully' });
+  } catch (error) {
+    console.error('Admin delete user error:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+/**
+ * Get audit log
+ * 
+ * @route GET /api/admin/audit-log
+ * @query {number} page - Page number
+ * @query {number} limit - Items per page
+ */
+app.get('/api/admin/audit-log', authenticateToken, requireRole('admin'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = (page - 1) * limit;
+
+    // Check if audit table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'admin_audit_log'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      return res.json({ 
+        auditLogs: [], 
+        pagination: { page, limit, total: 0, totalPages: 0 },
+        message: 'Audit logging not yet configured'
+      });
+    }
+
+    const countResult = await pool.query('SELECT COUNT(*) FROM admin_audit_log');
+    const total = parseInt(countResult.rows[0].count);
+
+    const result = await pool.query(`
+      SELECT al.*, u.email as admin_email, u.first_name, u.last_name
+      FROM admin_audit_log al
+      JOIN users u ON al.admin_id = u.id
+      ORDER BY al.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+
+    res.json({
+      auditLogs: result.rows.map(log => ({
+        id: log.id,
+        action: log.action,
+        targetType: log.target_type,
+        targetId: log.target_id,
+        details: log.details,
+        createdAt: log.created_at,
+        admin: {
+          id: log.admin_id,
+          email: log.admin_email,
+          firstName: log.first_name,
+          lastName: log.last_name
+        }
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Admin audit log error:', error);
+    res.status(500).json({ error: 'Failed to fetch audit log' });
+  }
 });

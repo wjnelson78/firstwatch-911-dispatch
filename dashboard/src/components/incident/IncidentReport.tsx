@@ -1,8 +1,13 @@
 /**
- * Incident Report Component
+ * Enhanced Incident Report Component
  * 
- * Official incident intake form for community members to submit
- * detailed reports similar to police reports.
+ * Comprehensive incident intake form with:
+ * - Agency selection with all Snohomish County agencies
+ * - Severity and urgency levels
+ * - Property damage assessment
+ * - Environmental conditions (weather, lighting, road)
+ * - Expanded incident categories
+ * - Anonymous reporting option
  */
 
 import { useState, useRef, useEffect } from 'react';
@@ -38,48 +43,126 @@ import {
   Shield,
   Flame,
   ThumbsUp,
-  AlertOctagon
+  AlertOctagon,
+  Building2,
+  Gauge,
+  Clock,
+  DollarSign,
+  CloudRain,
+  Sun,
+  Moon,
+  Eye,
+  EyeOff,
+  Ambulance
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { DispatchEvent } from '@/types/dispatch';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-// Categorized incident types
+// Expanded categorized incident types
 const INCIDENT_CATEGORIES = {
-  'General Incidents': [
-    'Theft/Burglary',
-    'Vandalism',
-    'Suspicious Activity',
-    'Traffic Incident',
-    'Noise Complaint',
-    'Animal Related',
-    'Harassment',
-    'Assault',
-    'Drug Activity',
-    'Domestic Disturbance',
-    'Missing Person',
-    'Found Property',
-    'Lost Property',
-    'Fraud/Scam',
+  'Property Crimes': [
+    'Theft/Larceny',
+    'Burglary/Break-in',
+    'Motor Vehicle Theft',
+    'Vandalism/Criminal Mischief',
+    'Arson',
     'Trespassing',
-    'Other'
+    'Shoplifting',
+    'Identity Theft',
+    'Fraud/Scam',
+    'Found Property',
+    'Lost Property'
+  ],
+  'Violent Crimes': [
+    'Assault',
+    'Robbery',
+    'Domestic Violence',
+    'Harassment/Stalking',
+    'Threats/Intimidation',
+    'Weapons Offense'
+  ],
+  'Traffic Related': [
+    'Traffic Accident - Property Damage',
+    'Traffic Accident - Injury',
+    'Hit and Run',
+    'Reckless/Dangerous Driving',
+    'DUI/Impaired Driver',
+    'Road Hazard',
+    'Parking Violation',
+    'Street Racing'
+  ],
+  'Public Safety': [
+    'Suspicious Person',
+    'Suspicious Vehicle',
+    'Suspicious Activity',
+    'Drug Activity',
+    'Public Intoxication',
+    'Disturbance/Fight',
+    'Noise Complaint',
+    'Fireworks Violation',
+    'Prowler'
+  ],
+  'Emergency/Rescue': [
+    'Missing Person',
+    'Medical Emergency',
+    'Mental Health Crisis',
+    'Welfare Check Request',
+    'Child Endangerment',
+    'Elder Abuse'
+  ],
+  'Animal Related': [
+    'Animal Bite',
+    'Dangerous Animal',
+    'Animal Neglect/Abuse',
+    'Stray Animal',
+    'Wildlife Issue'
   ],
   'Police Related': [
     'Police Misconduct',
-    'Police Appreciation'
+    'Excessive Force',
+    'Wrongful Arrest',
+    'Police Appreciation/Commendation'
   ],
   'Fire/EMS Related': [
-    'Fire/EMS Misconduct',
-    'Fire/EMS Appreciation'
+    'Fire Department Misconduct',
+    'EMS Misconduct',
+    'Fire/EMS Appreciation/Commendation'
+  ],
+  'Other': [
+    'Civil Dispute',
+    'Neighbor Dispute',
+    'Code Violation',
+    'Other'
   ]
 };
 
-// Generate a random incident ID: YYYYMMDD-XXXXX (random alphanumeric)
+// Severity levels with descriptions
+const SEVERITY_LEVELS = [
+  { value: 'minor', label: 'Minor', color: 'text-green-400', description: 'No injuries, minimal impact' },
+  { value: 'moderate', label: 'Moderate', color: 'text-yellow-400', description: 'Minor injuries or significant property damage' },
+  { value: 'major', label: 'Major', color: 'text-orange-400', description: 'Serious injuries or major impact' },
+  { value: 'critical', label: 'Critical', color: 'text-red-400', description: 'Life-threatening or catastrophic' }
+];
+
+// Urgency levels
+const URGENCY_LEVELS = [
+  { value: 'routine', label: 'Routine', description: 'No immediate action needed' },
+  { value: 'soon', label: 'Soon', description: 'Needs attention within hours' },
+  { value: 'immediate', label: 'Immediate', description: 'Requires immediate response' }
+];
+
+// Environmental conditions
+const WEATHER_CONDITIONS = ['Clear', 'Cloudy', 'Partly Cloudy', 'Rain', 'Heavy Rain', 'Snow', 'Fog', 'Windy', 'Other'];
+const LIGHTING_CONDITIONS = ['Daylight', 'Dawn/Dusk', 'Dark - Lit Area', 'Dark - Unlit Area'];
+const ROAD_CONDITIONS = ['Dry', 'Wet', 'Icy', 'Snow-covered', 'Flooded', 'Construction', 'Other'];
+
+// Generate a random incident ID
 function generateIncidentId(): string {
   const today = new Date();
   const datePrefix = today.toISOString().slice(0, 10).replace(/-/g, '');
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoiding confusing chars like 0/O, 1/I/L
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let randomPart = '';
   for (let i = 0; i < 5; i++) {
     randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -94,40 +177,69 @@ interface UploadedFile {
   preview?: string;
 }
 
+interface Agency {
+  name: string;
+  type: string;
+}
+
 interface IncidentFormData {
   reporterName: string;
   reporterPhone: string;
   reporterEmail: string;
+  isAnonymous: boolean;
   incidentType: string;
   incidentDate: string;
   incidentTime: string;
   locationAddress: string;
   locationCity: string;
   locationZip: string;
+  targetAgency: string;
+  agencyType: string;
+  severity: string;
+  urgency: string;
   description: string;
   personsInvolved: string;
   vehiclesInvolved: string;
   injuriesReported: boolean;
   injuryDetails: string;
+  propertyDamage: boolean;
+  damageDescription: string;
+  estimatedDamageValue: string;
+  weatherConditions: string;
+  lightingConditions: string;
+  roadConditions: string;
   witnessInfo: string;
+  linkedDispatchEventId: string;
 }
 
 const initialFormData: IncidentFormData = {
   reporterName: '',
   reporterPhone: '',
   reporterEmail: '',
+  isAnonymous: false,
   incidentType: '',
   incidentDate: '',
   incidentTime: '',
   locationAddress: '',
   locationCity: '',
   locationZip: '',
+  targetAgency: '',
+  agencyType: '',
+  severity: 'moderate',
+  urgency: 'routine',
   description: '',
   personsInvolved: '',
   vehiclesInvolved: '',
   injuriesReported: false,
   injuryDetails: '',
-  witnessInfo: ''
+  propertyDamage: false,
+  damageDescription: '',
+  estimatedDamageValue: '',
+  weatherConditions: '',
+  lightingConditions: '',
+  roadConditions: '',
+  witnessInfo: '',
+  linkedDispatchEventId: ''
 };
 
 interface IncidentReportProps {
@@ -144,16 +256,26 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
-  // Generate incident ID immediately on component mount
   const [incidentNumber, setIncidentNumber] = useState<string>(() => generateIncidentId());
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(1);
   
-  // File upload state
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [agencies, setAgencies] = useState<Agency[]>([]);
+  const [agenciesGrouped, setAgenciesGrouped] = useState<Record<string, string[]>>({});
 
-  // Update form data when user logs in/out
+  useEffect(() => {
+    fetch(`${API_BASE}/agencies`)
+      .then(res => res.json())
+      .then(data => {
+        setAgencies(data.agencies || []);
+        setAgenciesGrouped(data.grouped || {});
+      })
+      .catch(err => console.error('Failed to fetch agencies:', err));
+  }, []);
+
   useEffect(() => {
     setFormData(prev => ({
       ...prev,
@@ -162,7 +284,6 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
     }));
   }, [user]);
 
-  // Pre-fill form from dispatch event
   useEffect(() => {
     if (prefilledEvent) {
       const eventDate = new Date(prefilledEvent.call_created);
@@ -173,29 +294,31 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
         incidentTime: eventDate.toTimeString().slice(0, 5),
         locationAddress: prefilledEvent.address,
         locationCity: prefilledEvent.jurisdiction,
+        targetAgency: prefilledEvent.jurisdiction,
+        agencyType: prefilledEvent.agency_type,
+        linkedDispatchEventId: prefilledEvent.event_id,
         description: `Linked to dispatch call: ${prefilledEvent.call_type}\n\nCall Number: ${prefilledEvent.call_number}\nAgency: ${prefilledEvent.agency_type}${prefilledEvent.units ? `\nUnits: ${prefilledEvent.units}` : ''}\n\n`
       }));
       onEventHandled?.();
     }
   }, [prefilledEvent, onEventHandled]);
 
-  // Map dispatch call types to incident types
   function mapCallTypeToIncidentType(callType: string): string {
     const lowerType = callType.toLowerCase();
-    if (lowerType.includes('theft') || lowerType.includes('burglary') || lowerType.includes('robbery')) return 'Theft/Burglary';
-    if (lowerType.includes('vandal')) return 'Vandalism';
+    if (lowerType.includes('theft') || lowerType.includes('burglary') || lowerType.includes('robbery')) return 'Theft/Larceny';
+    if (lowerType.includes('vandal')) return 'Vandalism/Criminal Mischief';
     if (lowerType.includes('suspicious')) return 'Suspicious Activity';
-    if (lowerType.includes('traffic') || lowerType.includes('accident') || lowerType.includes('collision')) return 'Traffic Incident';
+    if (lowerType.includes('traffic') || lowerType.includes('accident') || lowerType.includes('collision')) return 'Traffic Accident - Property Damage';
     if (lowerType.includes('noise')) return 'Noise Complaint';
-    if (lowerType.includes('animal') || lowerType.includes('dog') || lowerType.includes('cat')) return 'Animal Related';
+    if (lowerType.includes('animal') || lowerType.includes('dog') || lowerType.includes('cat')) return 'Stray Animal';
     if (lowerType.includes('assault')) return 'Assault';
-    if (lowerType.includes('domestic')) return 'Domestic Disturbance';
+    if (lowerType.includes('domestic')) return 'Domestic Violence';
     if (lowerType.includes('missing')) return 'Missing Person';
     if (lowerType.includes('trespass')) return 'Trespassing';
+    if (lowerType.includes('medical') || lowerType.includes('aid')) return 'Medical Emergency';
     return 'Other';
   }
 
-  // File upload handlers
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -231,6 +354,15 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
+  const handleAgencySelect = (agencyName: string) => {
+    const agency = agencies.find(a => a.name === agencyName);
+    setFormData(prev => ({
+      ...prev,
+      targetAgency: agencyName,
+      agencyType: agency?.type || 'Other'
+    }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -245,7 +377,6 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
         headers['Authorization'] = `Bearer ${accessToken}`;
       }
 
-      // Combine date and time
       const incidentDateTime = formData.incidentDate && formData.incidentTime
         ? `${formData.incidentDate}T${formData.incidentTime}`
         : formData.incidentDate || new Date().toISOString();
@@ -255,7 +386,8 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
         headers,
         body: JSON.stringify({
           ...formData,
-          incidentDate: incidentDateTime
+          incidentDate: incidentDateTime,
+          estimatedDamageValue: formData.estimatedDamageValue ? parseFloat(formData.estimatedDamageValue) : null
         })
       });
 
@@ -282,12 +414,16 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
       reporterEmail: user?.email || ''
     });
     setSubmitSuccess(false);
-    setIncidentNumber(generateIncidentId()); // Generate new ID for next report
+    setIncidentNumber(generateIncidentId());
     setUploadedFiles([]);
     setStep(1);
   };
 
-  // Success screen
+  const isTrafficRelated = formData.incidentType.toLowerCase().includes('traffic') || 
+                          formData.incidentType.toLowerCase().includes('accident') ||
+                          formData.incidentType.toLowerCase().includes('hit and run') ||
+                          formData.incidentType.toLowerCase().includes('driving');
+
   if (submitSuccess) {
     return (
       <Card className="bg-slate-900/50 border-slate-700/50 backdrop-blur max-w-2xl mx-auto">
@@ -318,7 +454,7 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
   }
 
   return (
-    <Card className="bg-slate-900/50 border-slate-700/50 backdrop-blur max-w-3xl mx-auto">
+    <Card className="bg-slate-900/50 border-slate-700/50 backdrop-blur max-w-4xl mx-auto">
       <CardHeader className="border-b border-slate-700">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -333,14 +469,12 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
             </div>
           </div>
           
-          {/* Incident ID Badge */}
           <div className="bg-slate-800/70 rounded-lg px-4 py-2 text-right">
             <p className="text-xs text-slate-500 mb-0.5">Incident ID</p>
             <p className="text-lg font-mono font-bold text-purple-400">{incidentNumber}</p>
           </div>
         </div>
         
-        {/* Save/Continue Later Buttons */}
         <div className="mt-4 flex items-center gap-3">
           <Button
             variant="outline"
@@ -373,9 +507,8 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
           </p>
         )}
         
-        {/* Progress Steps */}
         <div className="flex items-center justify-center gap-2 mt-6">
-          {[1, 2, 3, 4].map((s) => (
+          {[1, 2, 3, 4, 5].map((s) => (
             <div key={s} className="flex items-center">
               <button
                 onClick={() => setStep(s)}
@@ -390,20 +523,21 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
               >
                 {step > s ? '✓' : s}
               </button>
-              {s < 4 && (
+              {s < 5 && (
                 <div className={cn(
-                  "w-12 h-0.5 mx-1",
+                  "w-8 h-0.5 mx-1",
                   step > s ? "bg-green-500/50" : "bg-slate-700"
                 )} />
               )}
             </div>
           ))}
         </div>
-        <div className="flex justify-center gap-6 mt-2 text-xs text-slate-500">
+        <div className="flex justify-center gap-4 mt-2 text-xs text-slate-500">
           <span className={step >= 1 ? "text-white" : ""}>Contact</span>
           <span className={step >= 2 ? "text-white" : ""}>Details</span>
-          <span className={step >= 3 ? "text-white" : ""}>Additional</span>
-          <span className={step >= 4 ? "text-white" : ""}>Evidence</span>
+          <span className={step >= 3 ? "text-white" : ""}>Assessment</span>
+          <span className={step >= 4 ? "text-white" : ""}>Additional</span>
+          <span className={step >= 5 ? "text-white" : ""}>Evidence</span>
         </div>
       </CardHeader>
 
@@ -424,45 +558,71 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                 Your Contact Information
               </h3>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">Full Name *</label>
-                  <Input
-                    value={formData.reporterName}
-                    onChange={(e) => updateField('reporterName', e.target.value)}
-                    placeholder="Your full name"
-                    required
-                    className="bg-slate-800/50 border-slate-700 text-white"
+              <div className="bg-slate-800/50 rounded-lg p-4 mb-4">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.isAnonymous}
+                    onChange={(e) => updateField('isAnonymous', e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">Phone Number *</label>
-                  <Input
-                    value={formData.reporterPhone}
-                    onChange={(e) => updateField('reporterPhone', e.target.value)}
-                    placeholder="(555) 123-4567"
-                    type="tel"
-                    required
-                    className="bg-slate-800/50 border-slate-700 text-white"
-                  />
-                </div>
+                  <div className="flex items-center gap-2">
+                    {formData.isAnonymous ? (
+                      <EyeOff className="h-5 w-5 text-purple-400" />
+                    ) : (
+                      <Eye className="h-5 w-5 text-slate-400" />
+                    )}
+                    <span className="text-sm font-medium text-white">Submit Anonymously</span>
+                  </div>
+                </label>
+                <p className="text-xs text-slate-500 mt-2 ml-8">
+                  Your contact information will not be stored. Note: Anonymous reports may receive less follow-up.
+                </p>
               </div>
               
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Email Address *</label>
-                <Input
-                  value={formData.reporterEmail}
-                  onChange={(e) => updateField('reporterEmail', e.target.value)}
-                  placeholder="your@email.com"
-                  type="email"
-                  required
-                  className="bg-slate-800/50 border-slate-700 text-white"
-                />
-              </div>
-              
-              <p className="text-xs text-slate-500">
-                * Your contact information will only be shared with responding agencies
-              </p>
+              {!formData.isAnonymous && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-1">Full Name *</label>
+                      <Input
+                        value={formData.reporterName}
+                        onChange={(e) => updateField('reporterName', e.target.value)}
+                        placeholder="Your full name"
+                        required={!formData.isAnonymous}
+                        className="bg-slate-800/50 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-1">Phone Number *</label>
+                      <Input
+                        value={formData.reporterPhone}
+                        onChange={(e) => updateField('reporterPhone', e.target.value)}
+                        placeholder="(555) 123-4567"
+                        type="tel"
+                        required={!formData.isAnonymous}
+                        className="bg-slate-800/50 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-1">Email Address *</label>
+                    <Input
+                      value={formData.reporterEmail}
+                      onChange={(e) => updateField('reporterEmail', e.target.value)}
+                      placeholder="your@email.com"
+                      type="email"
+                      required={!formData.isAnonymous}
+                      className="bg-slate-800/50 border-slate-700 text-white"
+                    />
+                  </div>
+                  
+                  <p className="text-xs text-slate-500">
+                    * Your contact information will only be shared with responding agencies
+                  </p>
+                </>
+              )}
             </div>
           )}
 
@@ -474,6 +634,44 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                 Incident Details
               </h3>
               
+              <div className="bg-slate-800/30 rounded-lg p-4 mb-4">
+                <h4 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-blue-400" />
+                  Agency This Report Is For
+                </h4>
+                <Select
+                  value={formData.targetAgency}
+                  onValueChange={handleAgencySelect}
+                >
+                  <SelectTrigger className="bg-slate-800/50 border-slate-700 text-white">
+                    <SelectValue placeholder="Select agency..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
+                    {Object.entries(agenciesGrouped).map(([type, agencyList]) => (
+                      agencyList.length > 0 && (
+                        <div key={type}>
+                          <div className="px-2 py-1.5 text-xs font-semibold text-slate-500 bg-slate-800/50 flex items-center gap-2">
+                            {type === 'Police' && <Shield className="h-3 w-3 text-blue-400" />}
+                            {type === 'Fire' && <Flame className="h-3 w-3 text-red-400" />}
+                            {type === 'EMS' && <Ambulance className="h-3 w-3 text-green-400" />}
+                            {type}
+                          </div>
+                          {agencyList.map((agency: string) => (
+                            <SelectItem 
+                              key={agency} 
+                              value={agency}
+                              className="text-white hover:bg-slate-800"
+                            >
+                              {agency}
+                            </SelectItem>
+                          ))}
+                        </div>
+                      )
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-1">Incident Type *</label>
@@ -490,7 +688,8 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                           <div className="px-2 py-1.5 text-xs font-semibold text-slate-500 bg-slate-800/50 flex items-center gap-2">
                             {category === 'Police Related' && <Shield className="h-3 w-3 text-blue-400" />}
                             {category === 'Fire/EMS Related' && <Flame className="h-3 w-3 text-red-400" />}
-                            {category === 'General Incidents' && <AlertOctagon className="h-3 w-3 text-orange-400" />}
+                            {category === 'Property Crimes' && <AlertOctagon className="h-3 w-3 text-orange-400" />}
+                            {category === 'Traffic Related' && <Car className="h-3 w-3 text-yellow-400" />}
                             {category}
                           </div>
                           {types.map(type => (
@@ -592,8 +791,223 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
             </div>
           )}
 
-          {/* Step 3: Additional Information */}
+          {/* Step 3: Severity & Damage Assessment */}
           {step === 3 && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-white mb-4 flex items-center gap-2">
+                <Gauge className="h-5 w-5 text-yellow-400" />
+                Severity & Damage Assessment
+              </h3>
+              
+              <div className="bg-slate-800/30 rounded-lg p-4">
+                <label className="block text-sm font-medium text-slate-300 mb-3">
+                  Severity Level *
+                </label>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {SEVERITY_LEVELS.map(level => (
+                    <button
+                      key={level.value}
+                      type="button"
+                      onClick={() => updateField('severity', level.value)}
+                      className={cn(
+                        "p-3 rounded-lg border text-left transition-all",
+                        formData.severity === level.value
+                          ? "border-purple-500 bg-purple-500/10"
+                          : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                      )}
+                    >
+                      <span className={cn("font-medium", level.color)}>{level.label}</span>
+                      <p className="text-xs text-slate-500 mt-1">{level.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 rounded-lg p-4">
+                <label className="block text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-blue-400" />
+                  Urgency Level
+                </label>
+                <div className="grid grid-cols-3 gap-3">
+                  {URGENCY_LEVELS.map(level => (
+                    <button
+                      key={level.value}
+                      type="button"
+                      onClick={() => updateField('urgency', level.value)}
+                      className={cn(
+                        "p-3 rounded-lg border text-left transition-all",
+                        formData.urgency === level.value
+                          ? "border-purple-500 bg-purple-500/10"
+                          : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                      )}
+                    >
+                      <span className="font-medium text-white">{level.label}</span>
+                      <p className="text-xs text-slate-500 mt-1">{level.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Separator className="bg-slate-700" />
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.injuriesReported}
+                    onChange={(e) => updateField('injuriesReported', e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+                  />
+                  <span className="text-sm font-medium text-slate-300">Were there any injuries?</span>
+                </label>
+              </div>
+              
+              {formData.injuriesReported && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1">
+                    Injury Details
+                  </label>
+                  <textarea
+                    value={formData.injuryDetails}
+                    onChange={(e) => updateField('injuryDetails', e.target.value)}
+                    placeholder="Describe injuries and if medical attention was received..."
+                    rows={2}
+                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white placeholder:text-slate-500 resize-none focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+              )}
+
+              <Separator className="bg-slate-700" />
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.propertyDamage}
+                    onChange={(e) => updateField('propertyDamage', e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
+                  />
+                  <span className="text-sm font-medium text-slate-300">Was there property damage?</span>
+                </label>
+              </div>
+
+              {formData.propertyDamage && (
+                <div className="space-y-4 ml-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-1">
+                      Damage Description
+                    </label>
+                    <textarea
+                      value={formData.damageDescription}
+                      onChange={(e) => updateField('damageDescription', e.target.value)}
+                      placeholder="Describe the property damage..."
+                      rows={2}
+                      className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white placeholder:text-slate-500 resize-none focus:outline-none focus:border-purple-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" />
+                      Estimated Damage Value
+                    </label>
+                    <Input
+                      type="number"
+                      value={formData.estimatedDamageValue}
+                      onChange={(e) => updateField('estimatedDamageValue', e.target.value)}
+                      placeholder="0.00"
+                      min="0"
+                      step="0.01"
+                      className="bg-slate-800/50 border-slate-700 text-white max-w-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <Separator className="bg-slate-700" />
+
+              <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <CloudRain className="h-4 w-4 text-cyan-400" />
+                Environmental Conditions (Optional)
+              </h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2">
+                    <CloudRain className="h-4 w-4" />
+                    Weather
+                  </label>
+                  <Select
+                    value={formData.weatherConditions}
+                    onValueChange={(value) => updateField('weatherConditions', value)}
+                  >
+                    <SelectTrigger className="bg-slate-800/50 border-slate-700 text-white">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-900 border-slate-700">
+                      {WEATHER_CONDITIONS.map(condition => (
+                        <SelectItem key={condition} value={condition} className="text-white hover:bg-slate-800">
+                          {condition}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2">
+                    {formData.lightingConditions?.includes('Dark') ? (
+                      <Moon className="h-4 w-4" />
+                    ) : (
+                      <Sun className="h-4 w-4" />
+                    )}
+                    Lighting
+                  </label>
+                  <Select
+                    value={formData.lightingConditions}
+                    onValueChange={(value) => updateField('lightingConditions', value)}
+                  >
+                    <SelectTrigger className="bg-slate-800/50 border-slate-700 text-white">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-900 border-slate-700">
+                      {LIGHTING_CONDITIONS.map(condition => (
+                        <SelectItem key={condition} value={condition} className="text-white hover:bg-slate-800">
+                          {condition}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {isTrafficRelated && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2">
+                      <Car className="h-4 w-4" />
+                      Road Conditions
+                    </label>
+                    <Select
+                      value={formData.roadConditions}
+                      onValueChange={(value) => updateField('roadConditions', value)}
+                    >
+                      <SelectTrigger className="bg-slate-800/50 border-slate-700 text-white">
+                        <SelectValue placeholder="Select..." />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-700">
+                        {ROAD_CONDITIONS.map(condition => (
+                          <SelectItem key={condition} value={condition} className="text-white hover:bg-slate-800">
+                            {condition}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Additional Information */}
+          {step === 4 && (
             <div className="space-y-4">
               <h3 className="text-lg font-medium text-white mb-4 flex items-center gap-2">
                 <Users className="h-5 w-5 text-blue-400" />
@@ -626,35 +1040,6 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                   className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white placeholder:text-slate-500 resize-none focus:outline-none focus:border-purple-500/50"
                 />
               </div>
-
-              <Separator className="bg-slate-700" />
-              
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.injuriesReported}
-                    onChange={(e) => updateField('injuriesReported', e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500"
-                  />
-                  <span className="text-sm font-medium text-slate-300">Were there any injuries?</span>
-                </label>
-              </div>
-              
-              {formData.injuriesReported && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">
-                    Injury Details
-                  </label>
-                  <textarea
-                    value={formData.injuryDetails}
-                    onChange={(e) => updateField('injuryDetails', e.target.value)}
-                    placeholder="Describe injuries and if medical attention was received..."
-                    rows={2}
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white placeholder:text-slate-500 resize-none focus:outline-none focus:border-purple-500/50"
-                  />
-                </div>
-              )}
               
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">
@@ -683,8 +1068,8 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
             </div>
           )}
 
-          {/* Step 4: Evidence Upload */}
-          {step === 4 && (
+          {/* Step 5: Evidence Upload */}
+          {step === 5 && (
             <div className="space-y-4">
               <h3 className="text-lg font-medium text-white mb-4 flex items-center gap-2">
                 <Upload className="h-5 w-5 text-cyan-400" />
@@ -696,7 +1081,6 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                 Supported formats: JPG, PNG, GIF, MP4, MOV, MP3, WAV (max 50MB per file)
               </p>
               
-              {/* File Upload Area */}
               <div 
                 className="border-2 border-dashed border-slate-700 rounded-lg p-8 text-center hover:border-purple-500/50 transition-colors cursor-pointer"
                 onClick={() => fileInputRef.current?.click()}
@@ -715,7 +1099,6 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
                 <p className="text-xs text-slate-500 mt-1">Photos, Videos, or Audio files</p>
               </div>
               
-              {/* Uploaded Files List */}
               {uploadedFiles.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-slate-300">Uploaded Files ({uploadedFiles.length})</p>
@@ -779,13 +1162,13 @@ export function IncidentReport({ prefilledEvent, onEventHandled }: IncidentRepor
               <div />
             )}
             
-            {step < 4 ? (
+            {step < 5 ? (
               <Button
                 type="button"
                 onClick={() => setStep(step + 1)}
                 className="bg-purple-500 hover:bg-purple-600"
                 disabled={
-                  (step === 1 && (!formData.reporterName || !formData.reporterPhone || !formData.reporterEmail)) ||
+                  (step === 1 && !formData.isAnonymous && (!formData.reporterName || !formData.reporterPhone || !formData.reporterEmail)) ||
                   (step === 2 && (!formData.incidentType || !formData.incidentDate || !formData.locationAddress || !formData.description))
                 }
               >

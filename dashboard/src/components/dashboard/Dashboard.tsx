@@ -49,6 +49,7 @@ import { ChatForum, PrivateChat } from '@/components/chat';
 import { UserFeed } from '@/components/feed';
 import { IncidentReport } from '@/components/incident';
 import { MainNav, type ActiveView } from '@/components/navigation';
+import { AdminPage } from '@/components/admin';
 import { fetchDispatches, fetchStats, fetchFilters } from '@/services/api';
 import { 
   RefreshCw, 
@@ -231,6 +232,9 @@ export function Dashboard() {
   
   /** Track if this is the initial load (show skeleton) vs refresh (smooth update) */
   const isInitialLoadRef = useRef(true);
+
+  /** Whether admin panel is shown */
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
 
   // ============================================================================
   // Data Fetching
@@ -443,6 +447,11 @@ export function Dashboard() {
     return filters.callTypes.filter(ct => ct.agencyType === agencyFilter);
   }, [filters, agencyFilter]);
 
+  // If admin panel is open, render it instead of the dashboard
+  if (showAdminPanel) {
+    return <AdminPage onExit={() => setShowAdminPanel(false)} />;
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
       {/* Animated background elements */}
@@ -537,6 +546,7 @@ export function Dashboard() {
                   setCallTypeFilter(filter.callTypes[0]);
                 }
               }}
+              onOpenAdmin={() => setShowAdminPanel(true)}
             />
           </div>
         </div>

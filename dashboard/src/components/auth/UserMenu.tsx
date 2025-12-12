@@ -33,16 +33,18 @@ import {
   Star,
   LogIn,
   UserPlus,
-  ChevronDown 
+  ChevronDown,
+  Shield 
 } from 'lucide-react';
 
 interface UserMenuProps {
   jurisdictions?: string[];
   callTypes?: string[];
   onApplyFilter?: (filter: { jurisdictions?: string[], callTypes?: string[] }) => void;
+  onOpenAdmin?: () => void;
 }
 
-export function UserMenu({ jurisdictions = [], callTypes = [], onApplyFilter }: UserMenuProps) {
+export function UserMenu({ jurisdictions = [], callTypes = [], onApplyFilter, onOpenAdmin }: UserMenuProps) {
   const { user, isAuthenticated, logout, isLoading } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -172,6 +174,18 @@ export function UserMenu({ jurisdictions = [], callTypes = [], onApplyFilter }: 
             <Settings className="w-4 h-4 mr-2" />
             Settings
           </DropdownMenuItem>
+          {user?.role === 'admin' && onOpenAdmin && (
+            <>
+              <DropdownMenuSeparator className="bg-slate-700" />
+              <DropdownMenuItem 
+                onClick={onOpenAdmin}
+                className="text-purple-400 focus:bg-purple-500/10 focus:text-purple-400 cursor-pointer"
+              >
+                <Shield className="w-4 h-4 mr-2" />
+                Admin Panel
+              </DropdownMenuItem>
+            </>
+          )}
           <DropdownMenuSeparator className="bg-slate-700" />
           <DropdownMenuItem 
             onClick={handleLogout}
