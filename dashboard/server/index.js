@@ -516,6 +516,289 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// ============================================================================
+// SAVED/FAVORITE EVENTS ENDPOINTS
+// ============================================================================
+
+/**
+ * Get user's saved/favorited events
+ * 
+ * @route GET /api/events/favorites
+ * @query {string} tag - Filter by tag (optional)
+ * @query {number} page - Page number for pagination
+ * @query {number} limit - Items per page
+ * @returns {object} { favorites: [...], pagination: {...} }
+ */
+app.get('/api/events/favorites', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = (page - 1) * limit;
+    const tag = req.query.tag;
+
+    let whereClause = 'WHERE s.user_id = $1';
+    const params = [userId];
+    let paramIndex = 2;
+
+    if (tag) {
+      whereClause += ` AND $${paramIndex} = ANY(s.tags)`;
+      params.push(tag);
+      paramIndex++;
+    }
+
+    // Get total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM user_saved_events s ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get favorites with event details
+    const result = await pool.query(`
+      SELECT 
+        s.id as saved_id,
+        s.event_id,
+        s.tags,
+        s.notes,
+        s.created_at as saved_at,
+        e.call_number,
+        e.address,
+        e.call_type,
+        e.units,
+        e.call_created,
+        e.jurisdiction,
+        e.agency_type,
+        e.longitude,
+        e.latitude,
+        e.first_seen,
+        e.last_seen,
+        e.times_seen
+      FROM user_saved_events s
+      LEFT JOIN events e ON s.event_id = e.id
+      ${whereClause}
+      ORDER BY s.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `, [...params, limit, offset]);
+
+    // Get all unique tags for the user (for filter dropdown)
+    const tagsResult = await pool.query(`
+      SELECT DISTINCT unnest(tags) as tag
+      FROM user_saved_events
+      WHERE user_id = $1 AND array_length(tags, 1) > 0
+      ORDER BY tag
+    `, [userId]);
+
+    res.json({
+      favorites: result.rows.map(row => ({
+        savedId: row.saved_id,
+        eventId: row.event_id,
+        tags: row.tags || [],
+        notes: row.notes,
+        savedAt: row.saved_at,
+        event: row.call_number ? {
+          id: row.event_id,
+          call_number: row.call_number,
+          address: row.address,
+          call_type: row.call_type,
+          units: row.units,
+          call_created: row.call_created,
+          jurisdiction: row.jurisdiction,
+          agency_type: row.agency_type,
+          longitude: row.longitude,
+          latitude: row.latitude,
+          first_seen: row.first_seen,
+          last_seen: row.last_seen,
+          times_seen: row.times_seen
+        } : null
+      })),
+      availableTags: tagsResult.rows.map(r => r.tag),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching favorites:', error);
+    res.status(500).json({ error: 'Failed to fetch favorites' });
+  }
+});
+
+/**
+ * Check if an event is favorited by the user
+ * 
+ * @route GET /api/events/:id/favorite
+ * @returns {object} { isFavorited: boolean, savedEvent: {...} | null }
+ */
+app.get('/api/events/:id/favorite', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const eventId = parseInt(req.params.id);
+
+    const result = await pool.query(
+      `SELECT id, tags, notes, created_at FROM user_saved_events 
+       WHERE user_id = $1 AND event_id = $2`,
+      [userId, eventId]
+    );
+
+    if (result.rows.length > 0) {
+      res.json({
+        isFavorited: true,
+        savedEvent: {
+          id: result.rows[0].id,
+          tags: result.rows[0].tags || [],
+          notes: result.rows[0].notes,
+          savedAt: result.rows[0].created_at
+        }
+      });
+    } else {
+      res.json({ isFavorited: false, savedEvent: null });
+    }
+  } catch (error) {
+    console.error('Error checking favorite status:', error);
+    res.status(500).json({ error: 'Failed to check favorite status' });
+  }
+});
+
+/**
+ * Save/favorite an event
+ * 
+ * @route POST /api/events/:id/favorite
+ * @body {string[]} tags - Optional array of tags
+ * @body {string} notes - Optional notes
+ * @returns {object} { success: true, savedEvent: {...} }
+ */
+app.post('/api/events/:id/favorite', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const eventId = parseInt(req.params.id);
+    const { tags = [], notes = '' } = req.body;
+
+    // Validate event exists
+    const eventCheck = await pool.query('SELECT id FROM events WHERE id = $1', [eventId]);
+    if (eventCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Insert or update (upsert)
+    const result = await pool.query(`
+      INSERT INTO user_saved_events (user_id, event_id, tags, notes)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (user_id, event_id) 
+      DO UPDATE SET tags = $3, notes = $4
+      RETURNING id, tags, notes, created_at
+    `, [userId, eventId, tags, notes]);
+
+    res.json({
+      success: true,
+      savedEvent: {
+        id: result.rows[0].id,
+        eventId,
+        tags: result.rows[0].tags || [],
+        notes: result.rows[0].notes,
+        savedAt: result.rows[0].created_at
+      }
+    });
+  } catch (error) {
+    console.error('Error saving favorite:', error);
+    res.status(500).json({ error: 'Failed to save favorite' });
+  }
+});
+
+/**
+ * Update a saved event's tags/notes
+ * 
+ * @route PUT /api/events/:id/favorite
+ * @body {string[]} tags - Updated tags
+ * @body {string} notes - Updated notes
+ * @returns {object} { success: true, savedEvent: {...} }
+ */
+app.put('/api/events/:id/favorite', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const eventId = parseInt(req.params.id);
+    const { tags, notes } = req.body;
+
+    const result = await pool.query(`
+      UPDATE user_saved_events 
+      SET tags = COALESCE($3, tags), notes = COALESCE($4, notes)
+      WHERE user_id = $1 AND event_id = $2
+      RETURNING id, tags, notes, created_at
+    `, [userId, eventId, tags, notes]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Saved event not found' });
+    }
+
+    res.json({
+      success: true,
+      savedEvent: {
+        id: result.rows[0].id,
+        eventId,
+        tags: result.rows[0].tags || [],
+        notes: result.rows[0].notes,
+        savedAt: result.rows[0].created_at
+      }
+    });
+  } catch (error) {
+    console.error('Error updating favorite:', error);
+    res.status(500).json({ error: 'Failed to update favorite' });
+  }
+});
+
+/**
+ * Remove a saved/favorited event
+ * 
+ * @route DELETE /api/events/:id/favorite
+ * @returns {object} { success: true }
+ */
+app.delete('/api/events/:id/favorite', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const eventId = parseInt(req.params.id);
+
+    const result = await pool.query(
+      `DELETE FROM user_saved_events WHERE user_id = $1 AND event_id = $2 RETURNING id`,
+      [userId, eventId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Saved event not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error removing favorite:', error);
+    res.status(500).json({ error: 'Failed to remove favorite' });
+  }
+});
+
+/**
+ * Get all user's favorited event IDs (for quick lookup)
+ * 
+ * @route GET /api/events/favorites/ids
+ * @returns {object} { eventIds: number[] }
+ */
+app.get('/api/events/favorites/ids', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const result = await pool.query(
+      `SELECT event_id FROM user_saved_events WHERE user_id = $1`,
+      [userId]
+    );
+
+    res.json({
+      eventIds: result.rows.map(r => r.event_id)
+    });
+  } catch (error) {
+    console.error('Error fetching favorite IDs:', error);
+    res.status(500).json({ error: 'Failed to fetch favorite IDs' });
+  }
+});
+
 /**
  * Active Users Heartbeat
  * 

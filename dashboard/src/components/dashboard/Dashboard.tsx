@@ -44,6 +44,7 @@ import { StatsCards } from './StatsCards';
 import { Charts } from './Charts';
 import { EventDetailModal } from './EventDetailModal';
 import { ActiveUsers } from './ActiveUsers';
+import { SavedEvents } from './SavedEvents';
 import { UserMenu } from '@/components/auth/UserMenu';
 import { ChatForum, PrivateChat } from '@/components/chat';
 import { UserFeed } from '@/components/feed';
@@ -178,7 +179,7 @@ export function Dashboard() {
   /** Currently active view/section - initialize from URL hash */
   const getInitialView = (): ActiveView => {
     const hash = window.location.hash.slice(1); // Remove the #
-    const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat'];
+    const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat', 'saved'];
     return validViews.includes(hash as ActiveView) ? (hash as ActiveView) : 'dispatch';
   };
   const [activeView, setActiveView] = useState<ActiveView>(getInitialView);
@@ -193,7 +194,7 @@ export function Dashboard() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1);
-      const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat'];
+      const validViews: ActiveView[] = ['dispatch', 'feed', 'report', 'chat', 'saved'];
       if (validViews.includes(hash as ActiveView)) {
         setActiveView(hash as ActiveView);
       }
@@ -1145,6 +1146,14 @@ export function Dashboard() {
         {/* === PRIVATE CHAT VIEW === */}
         {activeView === 'chat' && (
           <PrivateChat />
+        )}
+
+        {/* === SAVED EVENTS VIEW === */}
+        {activeView === 'saved' && (
+          <SavedEvents 
+            onBack={() => handleViewChange('dispatch')}
+            onSelectEvent={(event) => setSelectedEvent(event)}
+          />
         )}
       </main>
 

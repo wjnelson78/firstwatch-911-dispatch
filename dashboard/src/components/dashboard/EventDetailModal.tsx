@@ -40,10 +40,14 @@ import {
   Ambulance,
   AlertTriangle,
   MessageSquarePlus,
-  FileWarning
+  FileWarning,
+  Star
 } from 'lucide-react';
 import type { DispatchEvent } from '@/types/dispatch';
 import { format, formatDistanceToNow } from 'date-fns';
+import { useFavorites } from '@/contexts/FavoritesContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useState } from 'react';
 
 /**
  * Props for the EventDetailModal component
@@ -71,6 +75,22 @@ interface EventDetailModalProps {
 export function EventDetailModal({ event, open, onClose, onNavigate }: EventDetailModalProps) {
   // Don't render if no event is selected
   if (!event) return null;
+
+  const { isAuthenticated } = useAuth();
+  const { isFavorited, toggleFavorite } = useFavorites();
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const eventIsFavorited = event.id ? isFavorited(event.id) : false;
+
+  const handleToggleFavorite = async () => {
+    if (!event.id || !isAuthenticated) return;
+    setIsSaving(true);
+    try {
+      await toggleFavorite(event.id);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleCreatePost = () => {
     onNavigate?.('feed', event);
@@ -144,6 +164,23 @@ export function EventDetailModal({ event, open, onClose, onNavigate }: EventDeta
                   <span className="text-sm">{timeAgo}</span>
                 </div>
               </div>
+              {/* Favorite Button */}
+              {isAuthenticated && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleToggleFavorite}
+                  disabled={isSaving}
+                  className={`h-10 w-10 rounded-full bg-white/20 hover:bg-white/30 transition-all ${
+                    eventIsFavorited ? 'text-yellow-300' : 'text-white/70 hover:text-white'
+                  }`}
+                  title={eventIsFavorited ? 'Remove from favorites' : 'Add to favorites'}
+                >
+                  <Star 
+                    className={`h-5 w-5 ${eventIsFavorited ? 'fill-current' : ''}`} 
+                  />
+                </Button>
+              )}
             </div>
           </DialogHeader>
         </div>
